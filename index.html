@@ -915,9 +915,12 @@ async function doPull(announce) {
   setSyncStatus('Checking…');
   try {
     const remote = await pullRemote();
+    const localEmpty = !(S.trades && S.trades.length) && !(S.stocks && S.stocks.length);
     if (remote) {
       const remoteU = remote.updatedAt || 0;
-      if (remoteU > (S.updatedAt || 0)) {
+      const remoteHasData = ((remote.trades&&remote.trades.length)||0) + ((remote.stocks&&remote.stocks.length)||0) > 0;
+      // Adopt remote if it's newer OR if this device is empty and the cloud has data (never let an empty device win)
+      if (remoteU > (S.updatedAt || 0) || (localEmpty && remoteHasData)) {
         S.trades = remote.trades || S.trades;
         if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
         if (remote.ethUsd) S.ethUsd = remote.ethUsd;
@@ -936,13 +939,15 @@ async function doPull(announce) {
         if (announce) toast('Pulled latest from your account ✓');
       } else {
         setSyncStatus('Synced ✓', 'ok');
-        if ((S.updatedAt || 0) > remoteU) doPush();   // this device is ahead
+        if ((S.updatedAt || 0) > remoteU && !localEmpty) doPush();   // only a non-empty device may push ahead
         else if (announce) toast('Already up to date ✓');
       }
-    } else {
-      await doPush();          // account is empty → seed it with this device's trades (migration)
+    } else if (!localEmpty) {
+      await doPush();          // account is empty → seed it with this device's data (migration)
       setSyncStatus('Synced ✓ (uploaded your trades)', 'ok');
       if (announce) toast('Your trades are now in your account ✓');
+    } else {
+      setSyncStatus('Synced ✓', 'ok');
     }
   } catch(e) {
     setSyncStatus('Sync error — '+(e.message||'try again'), 'err');
@@ -2466,10 +2471,12 @@ async function testJupiter() {
 
 // ─── DATA ──────────────────────────────────────────────────
 function exportData() {
-  const blob = new Blob([JSON.stringify({trades:S.trades,keys:S.keys},null,2)],{type:'application/json'});
+  const payload = { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, stocks:S.stocks, stockPx:S.stockPx,
+    baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg };
+  const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
   const a = Object.assign(document.createElement('a'),{
     href:URL.createObjectURL(blob),
-    download:`cryptotrack_${new Date().toISOString().slice(0,10)}.json`
+    download:`investtrack_${new Date().toISOString().slice(0,10)}.json`
   });
   a.click(); URL.revokeObjectURL(a.href);
 }
@@ -2479,7 +2486,17 @@ function importData(e) {
   reader.onload = ev => {
     try {
       const d = JSON.parse(ev.target.result);
-      if (d.trades) { S.trades = d.trades; if(d.keys) S.keys={...S.keys,...d.keys}; persist(); renderPortfolio(); toast(`Imported ${d.trades.length} trades ✓`); }
+      if (d.trades)  S.trades = d.trades;
+      if (d.keys)    S.keys = { ...S.keys, ...d.keys };
+      if (d.ethUsd)  S.ethUsd = d.ethUsd;
+      if (d.stocks)  S.stocks = d.stocks;
+      if (d.stockPx) S.stockPx = d.stockPx;
+      if (d.baseCcy) S.baseCcy = d.baseCcy;
+      if (d.fx)      S.fx = { ...S.fx, ...d.fx };
+      if (d.acctNames) S.acctNames = d.acctNames;
+      if (d.assetImg)  S.assetImg = d.assetImg;
+      persist(); loadState(); renderPortfolio(); renderStocks();
+      toast(`Imported ${(d.trades||[]).length} trades · ${(d.stocks||[]).length} stock records ✓`);
     } catch { toast('Invalid JSON file.'); }
   };
   reader.readAsText(f);
