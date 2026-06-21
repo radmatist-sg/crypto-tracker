@@ -189,22 +189,23 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   .filter-btn { padding: 7px 14px; font-size: 12.5px; }
   main .card { padding: 14px !important; }
 
-  /* ── Portfolio table → cards ── */
-  #trades-table thead { display: none; }
-  #trades-table, #trades-table tbody, #trades-table tr, #trades-table td { display: block; width: 100%; }
-  #trades-table tr {
+  /* ── Tables → cards (crypto + stocks) ── */
+  .cardable thead { display: none; }
+  .cardable, .cardable tbody, .cardable tr, .cardable td { display: block; width: 100%; }
+  .cardable tr {
     border: 1px solid var(--border); border-radius: 12px; margin-bottom: 14px;
     background: var(--surface); overflow: hidden;
   }
-  #trades-table tr:hover td { background: transparent; }
-  #trades-table td {
+  .cardable tr:hover td { background: transparent; }
+  .cardable td {
     padding: 9px 16px; border: none; text-align: right; overflow: hidden; min-height: 38px;
     font-size: 13.5px;
   }
-  #trades-table td::before {
+  .cardable td::before {
     float: left; color: var(--muted); font-size: 11px; text-transform: uppercase;
     letter-spacing: .5px; text-align: left; font-weight: 600; padding-top: 1px;
   }
+  /* crypto column labels */
   #trades-table td:nth-child(2)::before { content: "Chain"; }
   #trades-table td:nth-child(3)::before { content: "Amount"; }
   #trades-table td:nth-child(4)::before { content: "Entry (no fee)"; }
@@ -212,18 +213,24 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   #trades-table td:nth-child(6)::before { content: "Price"; }
   #trades-table td:nth-child(7)::before { content: "Value"; }
   #trades-table td:nth-child(8)::before { content: "P&L"; }
+  /* stocks column labels */
+  #stocks-table td:nth-child(2)::before { content: "Shares"; }
+  #stocks-table td:nth-child(3)::before { content: "Avg Cost"; }
+  #stocks-table td:nth-child(4)::before { content: "Price"; }
+  #stocks-table td:nth-child(5)::before { content: "Market Value"; }
+  #stocks-table td:nth-child(6)::before { content: "P&L"; }
 
   /* asset = card header (full width, no label) */
-  #trades-table td:first-child {
+  .cardable td:first-child {
     text-align: left; background: rgba(255,255,255,.025);
     border-bottom: 1px solid var(--border); padding: 13px 16px;
   }
-  #trades-table td:first-child::before { display: none; }
+  .cardable td:first-child::before { display: none; }
   /* actions = card footer with full-width buttons */
-  #trades-table td:last-child { text-align: left; padding: 12px 16px; }
-  #trades-table td:last-child::before { display: none; }
-  #trades-table .trade-actions { display: flex; gap: 8px; }
-  #trades-table .action-btn { flex: 1; text-align: center; padding: 10px 0; font-size: 13px; }
+  .cardable td:last-child { text-align: left; padding: 12px 16px; }
+  .cardable td:last-child::before { display: none; }
+  .cardable .trade-actions { display: flex; gap: 8px; }
+  .cardable .action-btn { flex: 1; text-align: center; padding: 10px 0; font-size: 13px; }
 
   /* keep position/buy/sell cues as a left accent on the whole card */
   #trades-table .pos-row  { border-left: 3px solid var(--blue); }
@@ -243,8 +250,9 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 <header>
   <div class="logo">crypto<span>track</span></div>
   <nav>
-    <button class="tab-btn active" onclick="switchTab('portfolio',this)">Portfolio</button>
-    <button class="tab-btn" onclick="switchTab('add',this)">+ Add Trade</button>
+    <button class="tab-btn active" onclick="switchTab('portfolio',this)">Crypto</button>
+    <button class="tab-btn" onclick="switchTab('add',this)">+ Add Crypto</button>
+    <button class="tab-btn" onclick="switchTab('stocks',this)">Stocks</button>
     <button class="tab-btn" onclick="switchTab('settings',this)">Settings</button>
   </nav>
 </header>
@@ -295,7 +303,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
       <button class="btn btn-secondary" style="margin-left:auto;padding:5px 13px;font-size:12px;" onclick="refreshPrices()">↻ Refresh Prices</button>
     </div>
     <div class="table-wrap">
-      <table id="trades-table">
+      <table id="trades-table" class="cardable">
         <thead>
           <tr>
             <th>Asset</th>
@@ -436,6 +444,94 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   </div>
 </div>
 
+<!-- ═══════════════════════════════ STOCKS ═══════════════════════════════ -->
+<div class="tab-pane" id="tab-stocks">
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:6px;align-items:center;">
+    <span style="font-size:12px;color:var(--muted);">Totals in</span>
+    <button class="filter-btn" id="ccy-usd" onclick="setBaseCcy('USD')">USD</button>
+    <button class="filter-btn" id="ccy-sgd" onclick="setBaseCcy('SGD')">SGD</button>
+  </div>
+  <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);">
+    <div class="stat-card">
+      <div class="stat-label">Invested</div>
+      <div class="stat-value" id="st-invested">$0.00</div>
+      <div class="stat-sub">cost basis, open positions</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Market Value</div>
+      <div class="stat-value" id="st-value">$0.00</div>
+      <div class="stat-sub">at live prices</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Unrealized P&amp;L</div>
+      <div class="stat-value" id="st-unreal">$0.00</div>
+      <div class="stat-sub" id="st-unreal-pct">open positions</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Realized + Income</div>
+      <div class="stat-value" id="st-realized">$0.00</div>
+      <div class="stat-sub" id="st-realized-sub">incl. dividends</div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:20px 24px;">
+    <div class="filter-bar">
+      <span class="card-title" style="margin:0;">Positions</span>
+      <button class="btn btn-secondary" style="margin-left:auto;padding:5px 13px;font-size:12px;" onclick="refreshStockPrices()">↻ Refresh Prices</button>
+    </div>
+    <div class="table-wrap">
+      <table id="stocks-table" class="cardable">
+        <thead>
+          <tr><th>Stock</th><th>Shares</th><th>Avg Cost</th><th>Price</th><th>Market Value</th><th>P&amp;L</th><th></th></tr>
+        </thead>
+        <tbody id="stocks-body"></tbody>
+      </table>
+      <div class="empty" id="stocks-empty">
+        <div class="empty-icon">📈</div>
+        <h3>No stock trades yet</h3>
+        <p>Import a broker CSV or add a trade manually below.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Import broker CSV</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Export your trade history from <strong style="color:var(--text)">moomoo</strong> or <strong style="color:var(--text)">Tiger</strong> and drop the file here. The format is auto-detected; trades you've already imported are skipped.</p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="document.getElementById('stock-csv-file').click()">Choose CSV file</button>
+      <input type="file" id="stock-csv-file" accept=".csv" style="display:none" onchange="importStockCsv(event)">
+      <span id="stock-import-status" style="font-size:12px;color:var(--muted);"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Add manually</div>
+    <div class="form-grid-3">
+      <div class="form-row">
+        <label>Broker</label>
+        <select id="st-broker"><option value="moomoo">moomoo</option><option value="tiger">Tiger</option><option value="ig">IG</option><option value="other">Other</option></select>
+      </div>
+      <div class="form-row">
+        <label>Type</label>
+        <select id="st-type" onchange="updateStockForm()"><option value="buy">Buy</option><option value="sell">Sell</option><option value="dividend">Dividend</option><option value="interest">Interest</option></select>
+      </div>
+      <div class="form-row">
+        <label>Currency</label>
+        <select id="st-ccy"><option value="USD">USD</option><option value="SGD">SGD</option><option value="HKD">HKD</option></select>
+      </div>
+      <div class="form-row" id="st-f-ticker"><label>Ticker</label><input id="st-ticker" placeholder="e.g. AAPL"></div>
+      <div class="form-row" id="st-f-name"><label>Name (optional)</label><input id="st-name" placeholder="e.g. Apple"></div>
+      <div class="form-row" id="st-f-shares"><label>Shares</label><input id="st-shares" type="number" step="0.0001" placeholder="0"></div>
+      <div class="form-row" id="st-f-price"><label>Price / share</label><input id="st-price" type="number" step="0.0001" placeholder="0.00"></div>
+      <div class="form-row" id="st-f-amount" style="display:none;"><label>Amount</label><input id="st-amount" type="number" step="0.01" placeholder="0.00"></div>
+      <div class="form-row" id="st-f-fees"><label>Fees</label><input id="st-fees" type="number" step="0.01" placeholder="0.00"></div>
+      <div class="form-row"><label>Date</label><input id="st-date" type="date"></div>
+    </div>
+    <div class="form-row"><label>Note (optional)</label><input id="st-note" placeholder="optional"></div>
+    <button class="btn btn-primary" onclick="addStockManual()">Add</button>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════ SETTINGS ═══════════════════════════════ -->
 <div class="tab-pane" id="tab-settings">
   <!-- Cloud Sync (Supabase account) -->
@@ -499,6 +595,16 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <div class="form-row">
       <label>OpenSea API Key</label>
       <input id="k-opensea" placeholder="your-opensea-api-key…">
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+  </div>
+
+  <div class="card" style="border-color:#1f8fff33;">
+    <div class="card-title" style="color:#4d9fff;">Finnhub — Live Stock Prices</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">Powers the live prices in the Stocks tab. Free key (60 calls/min) from <strong style="color:var(--text)">finnhub.io</strong> → sign up → Dashboard → copy your API key.</p>
+    <div class="form-row">
+      <label>Finnhub API Key</label>
+      <input id="k-finnhub" placeholder="your-finnhub-api-key…">
     </div>
     <button class="btn btn-primary" onclick="saveSettings()">Save</button>
   </div>
@@ -662,8 +768,9 @@ const STABLECOINS = new Set(['USDC','USDT','DAI','BUSD','FRAX','USDS']);
 function isStable(ccy) { return STABLECOINS.has(ccy); }
 
 // ─── STATE ─────────────────────────────────────────────────
-let S = { trades:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
-  sync:{url:'',key:'',code:''}, updatedAt:0 };
+let S = { trades:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
+  sync:{url:'',key:'',code:''}, updatedAt:0,
+  stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 } };   // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
 
 // Grouping: multiple buys of the same asset are merged into one position row.
 let expandedGroups = new Set();   // which group keys are expanded to show individual buys
@@ -744,16 +851,22 @@ function loadState() {
     if (d.ethUsd) S.ethUsd = d.ethUsd;   // last known ETH price, for instant NFT USD display
     if (d.sync) S.sync = { ...S.sync, ...d.sync };
     if (d.updatedAt) S.updatedAt = d.updatedAt;
+    if (d.stocks) S.stocks = d.stocks;
+    if (d.stockPx) S.stockPx = d.stockPx;
+    if (d.baseCcy) S.baseCcy = d.baseCcy;
+    if (d.fx) S.fx = { ...S.fx, ...d.fx };
   } catch {}
   document.getElementById('k-eth').value    = S.keys.eth    || '';
   document.getElementById('k-base').value   = S.keys.base   || '';
   document.getElementById('k-arb').value    = S.keys.arb    || '';
   document.getElementById('k-helius').value  = S.keys.helius  || '';
   document.getElementById('k-opensea').value = S.keys.opensea || '';
+  const fh = document.getElementById('k-finnhub'); if (fh) fh.value = S.keys.finnhub || '';
 }
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
-  localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt }));
+  localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt,
+    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
 function persist() {
@@ -781,7 +894,8 @@ async function pullRemote() {
 }
 async function pushRemote() {
   const { error } = await sb.from('portfolios').upsert(
-    { user_id: _user.id, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt }, updated_at: new Date().toISOString() },
+    { user_id: _user.id, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt,
+        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx }, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' });
   if (error) throw error;
 }
@@ -810,10 +924,15 @@ async function doPull(announce) {
         S.trades = remote.trades || S.trades;
         if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
         if (remote.ethUsd) S.ethUsd = remote.ethUsd;
+        if (remote.stocks)  S.stocks = remote.stocks;
+        if (remote.stockPx) S.stockPx = remote.stockPx;
+        if (remote.baseCcy) S.baseCcy = remote.baseCcy;
+        if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
         S.updatedAt = remoteU;
         persistLocal();
         loadState();
         renderPortfolio();
+        renderStocks();
         setSyncStatus('Synced ✓ (updated from cloud)', 'ok');
         if (announce) toast('Pulled latest from your account ✓');
       } else {
@@ -879,6 +998,7 @@ function switchTab(tab, btn) {
   document.getElementById('tab-'+tab).classList.add('active');
   btn.classList.add('active');
   if (tab === 'portfolio') renderPortfolio();
+  if (tab === 'stocks') renderStocks();
 }
 function goPortfolio() {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
@@ -2274,6 +2394,7 @@ function saveSettings() {
   S.keys.arb    = document.getElementById('k-arb').value.trim();
   S.keys.helius  = document.getElementById('k-helius').value.trim();
   S.keys.opensea = document.getElementById('k-opensea').value.trim();
+  S.keys.finnhub = document.getElementById('k-finnhub').value.trim();
   persist(); toast('Settings saved ✓');
 }
 
@@ -2349,9 +2470,279 @@ function toast(msg) {
   setTimeout(()=>el.classList.remove('show'), 2800);
 }
 
+// ═══════════════════════════════ STOCKS MODULE ═══════════════════════════════
+const _sn = s => parseFloat(String(s==null?'':s).replace(/,/g,'')) || 0;
+const CCY_SYM = { USD:'$', SGD:'S$', HKD:'HK$' };
+function ccySym(c) { return CCY_SYM[c] || (c+' '); }
+function toISODate(s) {
+  if (!s) return new Date().toISOString().slice(0,10);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const d = new Date(s); return isNaN(d) ? new Date().toISOString().slice(0,10) : d.toISOString().slice(0,10);
+}
+
+// Robust CSV parser (handles quoted commas + newlines inside fields — Tiger needs this).
+function parseCSV(text) {
+  const rows=[]; let row=[], field='', i=0, q=false;
+  while (i<text.length) { const c=text[i];
+    if (q) { if (c==='"') { if (text[i+1]==='"') { field+='"'; i++; } else q=false; } else field+=c; }
+    else { if (c==='"') q=true; else if (c===',') { row.push(field); field=''; }
+      else if (c==='\r') {} else if (c==='\n') { row.push(field); rows.push(row); row=[]; field=''; } else field+=c; }
+    i++; }
+  if (field.length||row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+function detectBroker(text) {
+  if (/Activity Statement/.test(text)) return 'tiger';
+  if (/"?Side"?,\s*"?Symbol"?,\s*"?Name"?,\s*"?Order Price"?/.test(text)) return 'moomoo';
+  return null;
+}
+// moomoo: only "Filled" rows; columns are positional (header has duplicate names).
+function parseMoomoo(text) {
+  const rows=parseCSV(text), out=[];
+  for (let r=1; r<rows.length; r++) { const c=rows[r];
+    if (c.length<25 || c[6]!=='Filled') continue;
+    const qty=_sn(c[18]), price=_sn(c[19]); if (!qty||!price) continue;
+    out.push({ broker:'moomoo', side:c[0], ticker:c[1], name:c[2], shares:qty, price,
+      fees:_sn(c[c.length-1]), ccy:c[23]||c[16]||'USD', date:toISODate((c[21]||'').replace(' ET','')) });
+  }
+  return out;
+}
+// Tiger: the Trades→Stock section; dedupe blank-symbol duplicate rows; sum fee columns.
+function parseTiger(text) {
+  const rows=parseCSV(text); let hdr=null, hidx=-1;
+  for (let i=0;i<rows.length;i++) { if (rows[i][0]==='Trades' && rows[i][4]==='Symbol' && rows[i][5]==='Market') { hdr=rows[i]; hidx=i; break; } }
+  if (!hdr) return [];
+  const col={}; hdr.forEach((h,idx)=>{ if (h) col[h.trim()]=idx; });
+  const out=[];
+  for (let i=hidx+1;i<rows.length;i++) { const c=rows[i];
+    if (c[0]!=='Trades') break;
+    if (c[1]!=='Stock' || c[3]!=='DATA') continue;
+    const sym=c[col['Symbol']]; if (!sym) continue;
+    const m=sym.match(/\(([^)]+)\)\s*$/);
+    const ticker=m?m[1]:sym, name=m?sym.replace(/\s*\([^)]+\)\s*$/,''):sym;
+    const shares=Math.abs(_sn(c[col['Quantity']])), price=_sn(c[col['Trade Price']]); if (!shares||!price) continue;
+    let fees=0; for (const k in col) { if (/Fee|Commission|GST|Duty|Levy|Tax|Tariff/i.test(k)) fees+=Math.abs(_sn(c[col[k]])); }
+    out.push({ broker:'tiger', side:c[col['Activity Type']]==='Close'?'Sell':'Buy', ticker, name, shares,
+      price, fees:+fees.toFixed(2), ccy:c[col['Currency']]||'USD', date:toISODate(c[col['Trade Time']]) });
+  }
+  return out;
+}
+function stockSig(e) { return [e.broker,e.ticker,e.date,e.kind,e.shares,e.price].join('|'); }
+function importStockCsv(ev) {
+  const f = ev.target.files[0]; if (!f) return;
+  const st = document.getElementById('stock-import-status');
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const broker = detectBroker(text);
+    if (!broker) { st.textContent = 'Unrecognised file — expected a moomoo or Tiger CSV.'; st.style.color='var(--red)'; return; }
+    const parsed = broker==='tiger' ? parseTiger(text) : parseMoomoo(text);
+    const have = new Set(S.stocks.map(stockSig));
+    let added=0;
+    for (const p of parsed) {
+      const e2 = { id: Date.now()+''+Math.random().toString(36).slice(2,6), kind: p.side==='Sell'?'sell':'buy',
+        broker:p.broker, ticker:(p.ticker||'').toUpperCase(), name:p.name, shares:p.shares, price:p.price, fees:p.fees, ccy:p.ccy, date:p.date };
+      if (have.has(stockSig(e2))) continue;
+      have.add(stockSig(e2)); S.stocks.push(e2); added++;
+    }
+    persist(); renderStocks();
+    st.style.color = 'var(--green)';
+    st.textContent = `Imported ${added} new ${broker} trade${added===1?'':'s'}${parsed.length-added>0?` (${parsed.length-added} already there)`:''} ✓`;
+    ev.target.value='';
+  };
+  reader.readAsText(f);
+}
+function updateStockForm() {
+  const t = document.getElementById('st-type').value;
+  const show = (id,on) => document.getElementById(id).style.display = on?'':'none';
+  const trade = t==='buy'||t==='sell';
+  show('st-f-shares', trade); show('st-f-price', trade); show('st-f-fees', trade);
+  show('st-f-amount', !trade);
+  show('st-f-ticker', t!=='interest'); show('st-f-name', t!=='interest');
+}
+function addStockManual() {
+  const t = document.getElementById('st-type').value;
+  const broker = document.getElementById('st-broker').value;
+  const ccy = document.getElementById('st-ccy').value;
+  const date = toISODate(document.getElementById('st-date').value);
+  const note = document.getElementById('st-note').value.trim();
+  const ticker = document.getElementById('st-ticker').value.trim().toUpperCase();
+  const name = document.getElementById('st-name').value.trim();
+  const e = { id: Date.now()+'', kind:t, broker, ccy, date, note };
+  if (t==='buy' || t==='sell') {
+    if (!ticker) { toast('Enter a ticker.'); return; }
+    const shares=_sn(document.getElementById('st-shares').value), price=_sn(document.getElementById('st-price').value);
+    if (!shares||!price) { toast('Enter shares and price.'); return; }
+    Object.assign(e, { ticker, name, shares, price, fees:_sn(document.getElementById('st-fees').value) });
+  } else {
+    const amount=_sn(document.getElementById('st-amount').value);
+    if (!amount) { toast('Enter an amount.'); return; }
+    Object.assign(e, { ticker: t==='dividend'?ticker:'', name, amount });
+  }
+  S.stocks.push(e); persist(); renderStocks();
+  ['st-ticker','st-name','st-shares','st-price','st-fees','st-amount','st-note'].forEach(id=>document.getElementById(id).value='');
+  toast('Added ✓');
+}
+
+// ── FX + live prices ──
+async function fetchFx() {
+  try {
+    const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=SGD');
+    if (r.ok) { const d = await r.json(); if (d.rates?.SGD) { S.fx.SGD = d.rates.SGD; persistLocal(); } }
+  } catch {}
+  return S.fx.SGD;
+}
+function toUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a/(S.fx.SGD||1.35) : a; }
+function toBase(a, ccy) { const u=toUSD(a,ccy); return S.baseCcy==='USD' ? u : u*(S.fx.SGD||1.35); }
+function setBaseCcy(c) { S.baseCcy = c; persist(); renderStocks(); }
+
+async function refreshStockPrices() {
+  if (!S.keys.finnhub) { toast('Add a free Finnhub API key in Settings to fetch stock prices.'); return; }
+  const tickers = [...new Set(S.stocks.filter(e=>e.kind==='buy'||e.kind==='sell').map(e=>(e.ticker||'').toUpperCase()))].filter(Boolean);
+  if (!tickers.length) return;
+  toast('Refreshing stock prices…');
+  await fetchFx();
+  for (const tk of tickers) {
+    try {
+      const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
+      if (r.ok) { const d = await r.json(); if (d && d.c) S.stockPx[tk] = { price:d.c, ts:Date.now() }; }
+    } catch {}
+  }
+  persist(); renderStocks(); toast('Stock prices updated ✓');
+}
+function editStockPrice(tk) {
+  const cur = S.stockPx[tk]?.price ?? '';
+  const raw = prompt(`Set current price for ${tk} (per share):`, cur);
+  if (raw===null) return;
+  const p = parseFloat(raw); if (isNaN(p)||p<0) { toast('Enter a valid number.'); return; }
+  S.stockPx[tk] = { price:p, ts:Date.now() }; persist(); renderStocks();
+}
+function prefillSell(tk, ccy) {
+  switchTab('stocks', document.querySelectorAll('.tab-btn')[2]);
+  document.getElementById('st-type').value='sell'; updateStockForm();
+  document.getElementById('st-ticker').value=tk;
+  if (ccy) document.getElementById('st-ccy').value=ccy;
+  document.getElementById('st-shares').focus();
+  document.getElementById('st-shares').scrollIntoView({behavior:'smooth', block:'center'});
+}
+function delStockTicker(tk) {
+  if (!confirm(`Remove ALL ${tk} entries (buys, sells, dividends)?`)) return;
+  S.stocks = S.stocks.filter(e => (e.ticker||'').toUpperCase() !== tk);
+  persist(); renderStocks();
+}
+
+// ── Grouping + average-cost metrics (per ticker, in its native currency) ──
+function stockGroups() {
+  const map = new Map();
+  for (const e of S.stocks) {
+    if (e.kind==='interest') continue;
+    if (e.kind==='dividend' && !e.ticker) continue;
+    const tk=(e.ticker||'').toUpperCase(), key=tk+'|'+(e.ccy||'USD');
+    if (!map.has(key)) map.set(key, { ticker:tk, ccy:e.ccy||'USD', name:e.name||'', brokers:new Set(), buys:[], sells:[], divs:[] });
+    const g=map.get(key);
+    if (e.broker) g.brokers.add(e.broker);
+    if (e.name && !g.name) g.name=e.name;
+    if (e.kind==='sell') g.sells.push(e); else if (e.kind==='dividend') g.divs.push(e); else g.buys.push(e);
+  }
+  return [...map.values()];
+}
+function stockMetrics(g) {
+  const totalBought=g.buys.reduce((s,b)=>s+(_sn(b.shares)),0);
+  const totalCost=g.buys.reduce((s,b)=>s+(_sn(b.shares)*_sn(b.price)+_sn(b.fees)),0);
+  const avgCost=totalBought?totalCost/totalBought:0;
+  const soldQty=g.sells.reduce((s,x)=>s+_sn(x.shares),0);
+  const remainingQty=Math.max(0,totalBought-soldQty);
+  const remainingCost=avgCost*remainingQty;
+  const realized=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)-avgCost*_sn(x.shares)),0);
+  const dividends=g.divs.reduce((s,d)=>s+_sn(d.amount),0);
+  const px=S.stockPx[g.ticker]?.price ?? null;
+  const marketValue=px!=null?px*remainingQty:null;
+  const unrealized=marketValue!=null?marketValue-remainingCost:null;
+  return { ...g, totalBought, avgCost, soldQty, remainingQty, remainingCost, realized, dividends, px, marketValue, unrealized };
+}
+
+function renderStocks() {
+  document.getElementById('ccy-usd').classList.toggle('active', S.baseCcy==='USD');
+  document.getElementById('ccy-sgd').classList.toggle('active', S.baseCcy==='SGD');
+  const body=document.getElementById('stocks-body'), table=document.getElementById('stocks-table'), empty=document.getElementById('stocks-empty');
+  const ms = stockGroups().map(stockMetrics).sort((a,b)=>(b.marketValue||b.remainingCost||0)-(a.marketValue||a.remainingCost||0));
+  if (!S.stocks.length) { table.style.display='none'; empty.style.display='block'; renderStockStats([]); return; }
+  table.style.display=''; empty.style.display='none';
+  body.innerHTML = ms.map(stockRowHtml).join('');
+  renderStockStats(ms);
+}
+function renderStockStats(ms) {
+  let invested=0, value=0, realizedIncome=0;
+  for (const g of ms) {
+    if (g.remainingQty>0) { invested+=toBase(g.remainingCost,g.ccy); value+=toBase(g.marketValue!=null?g.marketValue:g.remainingCost,g.ccy); }
+    realizedIncome += toBase(g.realized+g.dividends, g.ccy);
+  }
+  for (const e of S.stocks) { if (e.kind==='interest' || (e.kind==='dividend'&&!e.ticker)) realizedIncome += toBase(_sn(e.amount), e.ccy||'USD'); }
+  const unreal=value-invested, sym=ccySym(S.baseCcy);
+  const set=(id,v)=>document.getElementById(id).textContent=v;
+  set('st-invested', sym+fmt(invested,2));
+  set('st-value', sym+fmt(value,2));
+  document.getElementById('st-unreal').textContent=(unreal>=0?'+':'-')+sym+fmt(Math.abs(unreal),2);
+  document.getElementById('st-unreal').className='stat-value '+(unreal>=0?'positive':'negative');
+  document.getElementById('st-unreal-pct').textContent = invested?`${unreal>=0?'+':''}${fmt(unreal/invested*100,1)}%`:'open positions';
+  document.getElementById('st-realized').textContent=(realizedIncome>=0?'+':'-')+sym+fmt(Math.abs(realizedIncome),2);
+  document.getElementById('st-realized').className='stat-value '+(realizedIncome>=0?'positive':'negative');
+}
+function stockRowHtml(g) {
+  const sym=ccySym(g.ccy), brokers=[...g.brokers].join(', ');
+  const closed = g.remainingQty<=0;
+  const sharesCell = (closed?'<span class="neutral">closed</span>':fmt(g.remainingQty, g.remainingQty%1?4:0))
+    + (g.soldQty>0 && !closed ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmt(g.soldQty,0)} of ${fmt(g.totalBought,0)}</span>`:'');
+  // price cell
+  let priceCell;
+  if (g.px!=null) priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')">${sym}${fmt(g.px,2)}</span>`;
+  else priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')" style="color:var(--muted);font-size:11px;">click / refresh</span>`;
+  // value
+  const valCell = closed ? '<span class="neutral">—</span>'
+    : g.marketValue!=null ? `${sym}${fmt(g.marketValue,2)}${g.ccy!==S.baseCcy?` <span style="color:var(--muted);font-size:11px;">${ccySym(S.baseCcy)}${fmt(toBase(g.marketValue,g.ccy),2)}</span>`:''}` : '<span class="neutral">—</span>';
+  // pnl: unrealized main + realized/dividend sub
+  let pnlCellH;
+  const subBits=[];
+  if (Math.abs(g.realized)>0.005) subBits.push(`${g.realized>=0?'+':'-'}${sym}${fmt(Math.abs(g.realized),2)} realized`);
+  if (g.dividends>0.005) subBits.push(`+${sym}${fmt(g.dividends,2)} div`);
+  const sub = subBits.length?`<span style="display:block;color:var(--muted);font-size:11px;">${subBits.join(' · ')}</span>`:'';
+  if (closed) {
+    const tot=g.realized+g.dividends;
+    pnlCellH=`<span class="${tot>=0?'positive':'negative'}">${tot>=0?'+':'-'}${sym}${fmt(Math.abs(tot),2)}</span> <span style="font-size:11px;color:var(--muted);">realized</span>`;
+  } else if (g.unrealized!=null) {
+    const pct=g.remainingCost?g.unrealized/g.remainingCost*100:null;
+    pnlCellH=`<span class="${g.unrealized>=0?'positive':'negative'}">${g.unrealized>=0?'+':'-'}${sym}${fmt(Math.abs(g.unrealized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${g.unrealized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}${sub}`;
+  } else pnlCellH=`<span class="neutral">—</span>${sub}`;
+  const actions = closed
+    ? `<button class="action-btn del" title="Remove" onclick="delStockTicker('${g.ticker}')">×</button>`
+    : `<button class="action-btn" title="Sell" onclick="prefillSell('${g.ticker}','${g.ccy}')">Sell</button>
+       <button class="action-btn" title="Refresh price" onclick="refreshStockPrices()">↻</button>
+       <button class="action-btn del" title="Remove" onclick="delStockTicker('${g.ticker}')">×</button>`;
+  return `<tr class="${closed?'row-closed':''}">
+    <td>
+      <div class="asset-cell">
+        <div class="asset-icon" style="color:var(--blue)">${(g.ticker||'?').slice(0,4)}</div>
+        <div>
+          <div class="asset-name">${esc(g.ticker)}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
+          <div class="asset-sub">${esc(g.name||'')}${brokers?` · ${esc(brokers)}`:''}</div>
+        </div>
+      </div>
+    </td>
+    <td style="font-size:12px;">${sharesCell}</td>
+    <td style="font-size:12px;color:var(--muted);">${sym}${fmt(g.avgCost,2)}</td>
+    <td>${priceCell}</td>
+    <td style="font-size:13px;">${valCell}</td>
+    <td>${pnlCellH}</td>
+    <td><div class="trade-actions">${actions}</div></td>
+  </tr>`;
+}
+
 // ─── INIT ──────────────────────────────────────────────────
 loadState();
+updateStockForm();
 renderPortfolio();
+renderStocks();
+fetchFx().then(() => renderStocks());
 // Restore the login session (and pull this account's data), then refresh prices.
 initAuth()
   .then(refreshEthRate)
