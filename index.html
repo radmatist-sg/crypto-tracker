@@ -287,10 +287,12 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
 <!-- ═══════════════════════════════ PORTFOLIO ═══════════════════════════════ -->
 <div class="tab-pane active" id="tab-portfolio">
-  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:6px;align-items:center;">
-    <span style="font-size:12px;color:var(--muted);">View</span>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:6px;align-items:center;flex-wrap:wrap;">
     <button class="filter-btn" id="cv-current" onclick="setView('current')">Current</button>
     <button class="filter-btn" id="cv-alltime" onclick="setView('alltime')">All-time</button>
+    <span style="font-size:12px;color:var(--muted);margin-left:8px;">Totals in</span>
+    <button class="filter-btn" id="ccyc-usd" onclick="setBaseCcy('USD')">USD</button>
+    <button class="filter-btn" id="ccyc-sgd" onclick="setBaseCcy('SGD')">SGD</button>
   </div>
   <div class="stats-grid" id="crypto-stats" style="grid-template-columns:repeat(5,1fr);"></div>
 
@@ -1857,19 +1859,24 @@ function renderStats(trades) {
   const unrealizedPnl = openValue - invested;
   const totalPnl = realizedPnl + unrealizedPnl;
   const pos = openCount + closedCount;
-  const money = n => (n>=0?'+':'-')+'$'+fmt(Math.abs(n),2);
+  const sym = ccySym(S.baseCcy);
+  const cv = u => toBase(u, 'USD');                      // crypto figures are USD → base ccy
+  const amt = u => sym+fmt(cv(u),2);
+  const money = n => (n>=0?'+':'-')+sym+fmt(Math.abs(cv(n)),2);
   const cls = n => n>=0?'positive':'negative';
   const alltime = S.view==='alltime';
   document.getElementById('cv-current').classList.toggle('active', !alltime);
   document.getElementById('cv-alltime').classList.toggle('active', alltime);
+  document.getElementById('ccyc-usd').classList.toggle('active', S.baseCcy==='USD');
+  document.getElementById('ccyc-sgd').classList.toggle('active', S.baseCcy==='SGD');
   const grid = document.getElementById('crypto-stats');
   if (grid) grid.innerHTML = !alltime
-    ? statCard('Total Invested','$'+fmt(invested,2),'cost basis, open')
-      + statCard('Open Value','$'+fmt(openValue,2),'at live prices')
+    ? statCard('Total Invested',amt(invested),'cost basis, open')
+      + statCard('Open Value',amt(openValue),'at live prices')
       + statCard('Unrealized P&L',money(unrealizedPnl), invested?`${unrealizedPnl>=0?'+':''}${fmt(unrealizedPnl/invested*100,1)}%`:'open positions', cls(unrealizedPnl))
       + statCard('Realized P&L',money(realizedPnl),`${closedCount} closed`, cls(realizedPnl))
       + statCard('Positions',pos,`${openCount} open · ${closedCount} closed`)
-    : statCard('Total Invested','$'+fmt(totalDeployed,2),'all buys incl. closed')
+    : statCard('Total Invested',amt(totalDeployed),'all buys incl. closed')
       + statCard('Total P&L',money(totalPnl), totalDeployed?`${totalPnl>=0?'+':''}${fmt(totalPnl/totalDeployed*100,1)}% on deployed`:'all-time', cls(totalPnl))
       + statCard('Realized P&L',money(realizedPnl),`${closedCount} closed`, cls(realizedPnl))
       + statCard('Unrealized P&L',money(unrealizedPnl),`${openCount} open`, cls(unrealizedPnl))
@@ -1880,9 +1887,9 @@ function renderStats(trades) {
   if (!openCount) { bd.innerHTML = ''; }
   else {
     const seg = (label, c) => {
-      const pnl = c.val - c.inv, sign = pnl>=0?'+':'-', cls = pnl>=0?'positive':'negative';
-      return `<strong style="color:var(--text);font-weight:600;">${label}</strong> $${fmt(c.val,2)} `
-           + `<span class="${cls}">(${sign}$${fmt(Math.abs(pnl),2)})</span>`;
+      const pnl = c.val - c.inv, sign = pnl>=0?'+':'-', scls = pnl>=0?'positive':'negative';
+      return `<strong style="color:var(--text);font-weight:600;">${label}</strong> ${sym}${fmt(cv(c.val),2)} `
+           + `<span class="${scls}">(${sign}${sym}${fmt(Math.abs(cv(pnl)),2)})</span>`;
     };
     bd.innerHTML = `${seg('NFTs',cat.nft)} &nbsp;·&nbsp; ${seg('Tokens',cat.coin)}`;
   }
@@ -2671,7 +2678,7 @@ async function fetchFx() {
 }
 function toUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a/(S.fx.SGD||1.35) : a; }
 function toBase(a, ccy) { const u=toUSD(a,ccy); return S.baseCcy==='USD' ? u : u*(S.fx.SGD||1.35); }
-function setBaseCcy(c) { S.baseCcy = c; persist(); renderStocks(); }
+function setBaseCcy(c) { S.baseCcy = c; persist(); renderStocks(); renderPortfolio(); }
 
 async function refreshStockPrices() {
   if (!S.keys.finnhub) { toast('Add a free Finnhub API key in Settings to fetch stock prices.'); return; }
