@@ -2684,12 +2684,6 @@ async function refreshStockPrices() {
       const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
       if (r.ok) { const d = await r.json(); if (d && d.c) S.stockPx[tk] = { price:d.c, ts:Date.now() }; }
     } catch {}
-    if (!S.assetImg['STK:'+tk]) {
-      try {
-        const pr = await fetch(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
-        if (pr.ok) { const pd = await pr.json(); if (pd && pd.logo) S.assetImg['STK:'+tk] = pd.logo; }
-      } catch {}
-    }
   }
   persist(); renderStocks(); toast('Stock prices updated ✓');
 }
@@ -2863,8 +2857,8 @@ function renderStockStats(ms) {
       + statCard('Unrealized P&L', money(unreal), invested?`${unreal>=0?'+':''}${fmt(unreal/invested*100,1)}% unrealised`:'open positions', cls(unreal))
       + statCard('Realized + Income', money(realizedIncome), 'incl. dividends', cls(realizedIncome))
     : fundedCard
-      + statCard('Total Invested', sym+fmt(investedSum,2), 'all buys incl. closed')
-      + statCard('Total P&L', money(totalProfit), pctyr(overallPct, annual, 'on deployed') || 'all-time', cls(totalProfit))
+      + statCard('Market Value', sym+fmt(value,2), 'open holdings now')
+      + statCard('Total P&L', money(totalProfit), pctyr(fundedPct, fundedAnnual, 'on funded') || 'all-time', cls(totalProfit))
       + statCard('Realized + Income', money(realizedIncome), 'closed + dividends', cls(realizedIncome))
       + statCard('Unrealized P&L', money(unreal), `${ms.filter(g=>g.remainingQty>0).length} open`, cls(unreal));
 }
@@ -2903,7 +2897,7 @@ function stockRowHtml(g) {
   return `<tr class="${closed?'row-closed':''}">
     <td>
       <div class="asset-cell">
-        ${iconHtml(imgFor('STK:'+g.ticker), g.ticker, 'var(--blue)')}
+        ${iconHtml('https://assets.parqet.com/logos/symbol/'+encodeURIComponent(g.ticker)+'?format=png', g.ticker, 'var(--blue)')}
         <div>
           <div class="asset-name">${esc(g.ticker)}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
           <div class="asset-sub">${esc(g.name||'')} · ${esc(acctLabel(g.broker))}</div>
