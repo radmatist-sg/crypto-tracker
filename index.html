@@ -477,7 +477,12 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <button class="filter-btn" id="ccy-usd" onclick="setBaseCcy('USD')">USD</button>
     <button class="filter-btn" id="ccy-sgd" onclick="setBaseCcy('SGD')">SGD</button>
   </div>
-  <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);">
+  <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);">
+    <div class="stat-card">
+      <div class="stat-label">Funded</div>
+      <div class="stat-value" id="st-funded">$0.00</div>
+      <div class="stat-sub" id="st-funded-sub">net deposits</div>
+    </div>
     <div class="stat-card">
       <div class="stat-label">Invested</div>
       <div class="stat-value" id="st-invested">$0.00</div>
@@ -543,7 +548,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
       </div>
       <div class="form-row">
         <label>Type</label>
-        <select id="st-type" onchange="updateStockForm()"><option value="buy">Buy</option><option value="sell">Sell</option><option value="dividend">Dividend</option><option value="interest">Interest</option></select>
+        <select id="st-type" onchange="updateStockForm()"><option value="buy">Buy</option><option value="sell">Sell</option><option value="dividend">Dividend</option><option value="interest">Interest</option><option value="deposit">Deposit (funding)</option><option value="withdraw">Withdrawal</option></select>
       </div>
       <div class="form-row">
         <label>Currency</label>
@@ -2534,6 +2539,7 @@ function toISODate(s) {
 
 // Robust CSV parser (handles quoted commas + newlines inside fields — Tiger needs this).
 function parseCSV(text) {
+  text = text.replace(/^﻿/, '');           // strip BOM so first column matches cleanly
   const rows=[]; let row=[], field='', i=0, q=false;
   while (i<text.length) { const c=text[i];
     if (q) { if (c==='"') { if (text[i+1]==='"') { field+='"'; i++; } else q=false; } else field+=c; }
@@ -2545,6 +2551,7 @@ function parseCSV(text) {
 }
 function detectBroker(text) {
   if (/Activity Statement/.test(text)) return 'tiger';
+  if (/Date,\s*Time,\s*Type,\s*Description,\s*Instrument,\s*ISIN,\s*Amount,\s*Currency/.test(text)) return 'ig';
   if (/"?Side"?,\s*"?Symbol"?,\s*"?Name"?,\s*"?Order Price"?/.test(text)) return 'moomoo';
   return null;
 }
@@ -2554,8 +2561,24 @@ function parseMoomoo(text) {
   for (let r=1; r<rows.length; r++) { const c=rows[r];
     if (c.length<25 || c[6]!=='Filled') continue;
     const qty=_sn(c[18]), price=_sn(c[19]); if (!qty||!price) continue;
-    out.push({ broker:'moomoo', side:c[0], ticker:c[1], name:c[2], shares:qty, price,
+    out.push({ broker:'moomoo', kind:c[0]==='Sell'?'sell':'buy', ticker:c[1], name:c[2], shares:qty, price,
       fees:_sn(c[c.length-1]), ccy:c[23]||c[16]||'USD', date:toISODate((c[21]||'').replace(' ET','')) });
+  }
+  return out;
+}
+// IG transaction history: cash ledger → deposits, dividends, interest, fees (NO share qty, so no buys/sells).
+function parseIG(text) {
+  const rows=parseCSV(text), out=[];
+  let h=-1; for (let i=0;i<rows.length;i++){ if (rows[i][0]==='Date' && rows[i][2]==='Type') { h=i; break; } }
+  if (h<0) return out;
+  for (let r=h+1;r<rows.length;r++) {
+    const c=rows[r]; if (c.length<8 || !c[0]) continue;
+    const type=(c[2]||'').toLowerCase(), amt=_sn(c[6]), ccy=c[7]||'USD', date=toISODate(c[0]), name=c[4]||'';
+    if (/deposit/.test(type))       out.push({ broker:'ig', kind:'deposit',  amount:Math.abs(amt), ccy, date, name });
+    else if (/withdraw/.test(type)) out.push({ broker:'ig', kind:'withdraw',  amount:Math.abs(amt), ccy, date, name });
+    else if (/dividend/.test(type)) out.push({ broker:'ig', kind:'dividend',  amount:amt, ccy, date, name });
+    else if (/interest/.test(type)) out.push({ broker:'ig', kind:'interest',  amount:amt, ccy, date, name });
+    else if (/fee|charge|tax/.test(type)) out.push({ broker:'ig', kind:'fee',  amount:amt, ccy, date, name });  // amount already negative
   }
   return out;
 }
@@ -2574,12 +2597,20 @@ function parseTiger(text) {
     const ticker=m?m[1]:sym, name=m?sym.replace(/\s*\([^)]+\)\s*$/,''):sym;
     const shares=Math.abs(_sn(c[col['Quantity']])), price=_sn(c[col['Trade Price']]); if (!shares||!price) continue;
     let fees=0; for (const k in col) { if (/Fee|Commission|GST|Duty|Levy|Tax|Tariff/i.test(k)) fees+=Math.abs(_sn(c[col[k]])); }
-    out.push({ broker:'tiger', side:c[col['Activity Type']]==='Close'?'Sell':'Buy', ticker, name, shares,
+    out.push({ broker:'tiger', kind:c[col['Activity Type']]==='Close'?'sell':'buy', ticker, name, shares,
       price, fees:+fees.toFixed(2), ccy:c[col['Currency']]||'USD', date:toISODate(c[col['Trade Time']]) });
+  }
+  // Deposits & Withdrawals section → funding entries
+  for (let i=0;i<rows.length;i++) {
+    const c=rows[i];
+    if (c[0]==='Deposits & Withdrawals' && c[3]==='DATA') {
+      const desc=(c[5]||'').toLowerCase(), amt=Math.abs(_sn(c[6])), ccy=c[7]||'USD', date=toISODate(c[4]);
+      if (amt) out.push({ broker:'tiger', kind:/withdraw/.test(desc)?'withdraw':'deposit', amount:amt, ccy, date });
+    }
   }
   return out;
 }
-function stockSig(e) { return [e.broker,e.ticker,e.date,e.kind,e.shares,e.price].join('|'); }
+function stockSig(e) { return [e.broker,e.ticker||'',e.date,e.kind,e.shares||'',e.price||'',e.amount||''].join('|'); }
 function importStockCsv(ev) {
   const f = ev.target.files[0]; if (!f) return;
   const st = document.getElementById('stock-import-status');
@@ -2587,19 +2618,22 @@ function importStockCsv(ev) {
   reader.onload = e => {
     const text = e.target.result;
     const broker = detectBroker(text);
-    if (!broker) { st.textContent = 'Unrecognised file — expected a moomoo or Tiger CSV.'; st.style.color='var(--red)'; return; }
-    const parsed = broker==='tiger' ? parseTiger(text) : parseMoomoo(text);
+    if (!broker) { st.textContent = 'Unrecognised file — expected a moomoo, Tiger or IG CSV.'; st.style.color='var(--red)'; return; }
+    const parsed = broker==='tiger' ? parseTiger(text) : broker==='ig' ? parseIG(text) : parseMoomoo(text);
     const have = new Set(S.stocks.map(stockSig));
     let added=0;
     for (const p of parsed) {
-      const e2 = { id: Date.now()+''+Math.random().toString(36).slice(2,6), kind: p.side==='Sell'?'sell':'buy',
-        broker:p.broker, ticker:(p.ticker||'').toUpperCase(), name:p.name, shares:p.shares, price:p.price, fees:p.fees, ccy:p.ccy, date:p.date };
+      const e2 = { id: Date.now()+''+Math.random().toString(36).slice(2,6), kind:p.kind,
+        broker:p.broker, ticker:(p.ticker||'').toUpperCase(), name:p.name||'', ccy:p.ccy||'USD', date:p.date };
+      if (p.shares!=null) e2.shares=p.shares; if (p.price!=null) e2.price=p.price;
+      if (p.fees!=null) e2.fees=p.fees; if (p.amount!=null) e2.amount=p.amount;
       if (have.has(stockSig(e2))) continue;
       have.add(stockSig(e2)); S.stocks.push(e2); added++;
     }
     persist(); renderStocks();
     st.style.color = 'var(--green)';
-    st.textContent = `Imported ${added} new ${broker} trade${added===1?'':'s'}${parsed.length-added>0?` (${parsed.length-added} already there)`:''} ✓`;
+    const msg = `Imported ${added} new ${broker} record${added===1?'':'s'}${parsed.length-added>0?` (${parsed.length-added} already there)`:''} ✓`;
+    st.textContent = msg; toast(msg);
     ev.target.value='';
   };
   reader.readAsText(f);
@@ -2608,9 +2642,10 @@ function updateStockForm() {
   const t = document.getElementById('st-type').value;
   const show = (id,on) => document.getElementById(id).style.display = on?'':'none';
   const trade = t==='buy'||t==='sell';
+  const showTicker = trade || t==='dividend';
   show('st-f-shares', trade); show('st-f-price', trade); show('st-f-fees', trade);
   show('st-f-amount', !trade);
-  show('st-f-ticker', t!=='interest'); show('st-f-name', t!=='interest');
+  show('st-f-ticker', showTicker); show('st-f-name', showTicker);
 }
 function addStockManual() {
   const t = document.getElementById('st-type').value;
@@ -2726,7 +2761,7 @@ function stockFlows(g, m) {
 function stockGroups() {
   const map = new Map();
   for (const e of S.stocks) {
-    if (e.kind==='interest') continue;
+    if (e.kind==='deposit' || e.kind==='withdraw' || e.kind==='interest' || e.kind==='fee') continue;
     if (e.kind==='dividend' && !e.ticker) continue;
     const tk=(e.ticker||'').toUpperCase(), broker=e.broker||'other', key=broker+'|'+tk+'|'+(e.ccy||'USD');
     if (!map.has(key)) map.set(key, { ticker:tk, broker, ccy:e.ccy||'USD', name:e.name||'', buys:[], sells:[], divs:[] });
@@ -2792,10 +2827,21 @@ function renderStockStats(ms) {
     absSum += toBase(g.absReturn, g.ccy); investedSum += toBase(g.totalInvested, g.ccy);
     for (const f of stockFlows(g, g)) pflows.push({ amount: toBase(f.amount, g.ccy), date: f.date });
   }
+  let netFunded=0; const fundFlows=[];
   for (const e of S.stocks) {
-    if ((e.kind==='interest' || (e.kind==='dividend'&&!e.ticker)) && (S.stockFilter==='all'||e.broker===S.stockFilter)) {
-      realizedIncome += toBase(_sn(e.amount), e.ccy||'USD'); absSum += toBase(_sn(e.amount), e.ccy||'USD');
-      pflows.push({ amount: toBase(_sn(e.amount), e.ccy||'USD'), date: new Date(e.date) });
+    const inScope = (S.stockFilter==='all'||e.broker===S.stockFilter);
+    if (!inScope) continue;
+    // income (dividends w/o ticker, interest, fees) → folds into profit
+    if (e.kind==='interest' || e.kind==='fee' || (e.kind==='dividend'&&!e.ticker)) {
+      const v = toBase(_sn(e.amount), e.ccy||'USD');
+      realizedIncome += v; absSum += v; pflows.push({ amount:v, date:new Date(e.date) });
+    }
+    // funding → net deposits + funded-return cash flows
+    if (e.kind==='deposit' || e.kind==='withdraw') {
+      const v = toBase(_sn(e.amount), e.ccy||'USD');
+      const signed = e.kind==='deposit' ? v : -v;
+      netFunded += signed;
+      fundFlows.push({ amount:-signed, date:new Date(e.date) });   // deposit = cash out of your pocket
     }
   }
   const unreal=value-invested, sym=ccySym(S.baseCcy);
@@ -2814,6 +2860,16 @@ function renderStockStats(ms) {
   if (overallPct!=null) sub.push(`${overallPct>=0?'+':''}${fmt(overallPct,1)}% total`);
   if (annual!=null) sub.push(`${annual>=0?'+':''}${fmt(annual*100,1)}%/yr`);
   document.getElementById('st-value-sub').textContent = sub.join(' · ') || 'at live prices';
+
+  // Funded card: net deposits + money-weighted return on funded capital
+  document.getElementById('st-funded').textContent = sym+fmt(netFunded,2);
+  const totalProfit = absSum;                              // investment P&L + income
+  const fundedPct = netFunded ? totalProfit/netFunded*100 : null;
+  const fundedAnnual = xirr([...fundFlows, { amount: netFunded+totalProfit, date: new Date() }]);
+  const fsub=[];
+  if (fundedPct!=null) fsub.push(`${fundedPct>=0?'+':''}${fmt(fundedPct,1)}% return`);
+  if (fundedAnnual!=null) fsub.push(`${fundedAnnual>=0?'+':''}${fmt(fundedAnnual*100,1)}%/yr`);
+  document.getElementById('st-funded-sub').textContent = fsub.join(' · ') || 'net deposits';
 }
 function stockRowHtml(g) {
   const sym=ccySym(g.ccy);
