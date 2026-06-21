@@ -495,7 +495,7 @@ create policy "sync access" on tracker
     <div class="card-title">Data</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <button class="btn btn-secondary" onclick="exportData()">Export JSON</button>
-      <button class="btn btn-secondary" onclick="document.getElementById(\'import-file\').click()">Import JSON</button>
+      <button class="btn btn-secondary" onclick="document.getElementById('import-file').click()">Import JSON</button>
       <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(event)">
       <button class="btn btn-danger" onclick="clearAll()">Clear All Data</button>
     </div>
