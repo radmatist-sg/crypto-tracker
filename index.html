@@ -287,33 +287,12 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
 <!-- ═══════════════════════════════ PORTFOLIO ═══════════════════════════════ -->
 <div class="tab-pane active" id="tab-portfolio">
-  <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);">
-    <div class="stat-card">
-      <div class="stat-label">Total Invested</div>
-      <div class="stat-value" id="s-invested">$0.00</div>
-      <div class="stat-sub">cost basis with fees</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Open Value</div>
-      <div class="stat-value" id="s-value">$0.00</div>
-      <div class="stat-sub">at live prices</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Unrealized P&amp;L</div>
-      <div class="stat-value" id="s-pnl">$0.00</div>
-      <div class="stat-sub" id="s-pnl-pct">open positions</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Realized P&amp;L</div>
-      <div class="stat-value" id="s-realized">$0.00</div>
-      <div class="stat-sub" id="s-realized-sub">closed positions</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Positions</div>
-      <div class="stat-value" id="s-count">0</div>
-      <div class="stat-sub" id="s-count-sub">0 open · 0 closed</div>
-    </div>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:6px;align-items:center;">
+    <span style="font-size:12px;color:var(--muted);">View</span>
+    <button class="filter-btn" id="cv-current" onclick="setView('current')">Current</button>
+    <button class="filter-btn" id="cv-alltime" onclick="setView('alltime')">All-time</button>
   </div>
+  <div class="stats-grid" id="crypto-stats" style="grid-template-columns:repeat(5,1fr);"></div>
 
   <div id="s-breakdown" style="margin:-8px 2px 18px;font-size:12.5px;color:var(--muted);"></div>
 
@@ -472,38 +451,14 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
 <!-- ═══════════════════════════════ STOCKS ═══════════════════════════════ -->
 <div class="tab-pane" id="tab-stocks">
-  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:6px;align-items:center;">
-    <span style="font-size:12px;color:var(--muted);">Totals in</span>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:6px;align-items:center;flex-wrap:wrap;">
+    <button class="filter-btn" id="sv-current" onclick="setView('current')">Current</button>
+    <button class="filter-btn" id="sv-alltime" onclick="setView('alltime')">All-time</button>
+    <span style="font-size:12px;color:var(--muted);margin-left:8px;">Totals in</span>
     <button class="filter-btn" id="ccy-usd" onclick="setBaseCcy('USD')">USD</button>
     <button class="filter-btn" id="ccy-sgd" onclick="setBaseCcy('SGD')">SGD</button>
   </div>
-  <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);">
-    <div class="stat-card">
-      <div class="stat-label">Funded</div>
-      <div class="stat-value" id="st-funded">$0.00</div>
-      <div class="stat-sub" id="st-funded-sub">net deposits</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Invested</div>
-      <div class="stat-value" id="st-invested">$0.00</div>
-      <div class="stat-sub">cost basis, open positions</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Market Value</div>
-      <div class="stat-value" id="st-value">$0.00</div>
-      <div class="stat-sub" id="st-value-sub">at live prices</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Unrealized P&amp;L</div>
-      <div class="stat-value" id="st-unreal">$0.00</div>
-      <div class="stat-sub" id="st-unreal-pct">open positions</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Realized + Income</div>
-      <div class="stat-value" id="st-realized">$0.00</div>
-      <div class="stat-sub" id="st-realized-sub">incl. dividends</div>
-    </div>
-  </div>
+  <div class="stats-grid" id="stocks-stats" style="grid-template-columns:repeat(5,1fr);"></div>
 
   <div class="card" style="padding:20px 24px;">
     <div class="filter-bar">
@@ -807,7 +762,7 @@ let S = { trades:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:''
   sync:{url:'',key:'',code:''}, updatedAt:0,
   stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 },     // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
   acctNames:{}, stockFilter:'all',                            // custom portfolio labels per broker; current stocks filter (runtime)
-  assetImg:{} };                                               // cached logo/image URLs: token/NFT by contract, stocks by 'STK:'+ticker
+  assetImg:{}, view:'current' };                              // cached logos; summary view 'current' (open holdings) vs 'alltime'
 
 // Grouping: multiple buys of the same asset are merged into one position row.
 let expandedGroups = new Set();   // which group keys are expanded to show individual buys
@@ -894,6 +849,7 @@ function loadState() {
     if (d.fx) S.fx = { ...S.fx, ...d.fx };
     if (d.acctNames) S.acctNames = d.acctNames;
     if (d.assetImg) S.assetImg = d.assetImg;
+    if (d.view) S.view = d.view;
   } catch {}
   document.getElementById('k-eth').value    = S.keys.eth    || '';
   document.getElementById('k-base').value   = S.keys.base   || '';
@@ -905,7 +861,7 @@ function loadState() {
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
   localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt,
-    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg }));
+    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
 function persist() {
@@ -1869,13 +1825,14 @@ function calcPct(t) {
 }
 
 function renderStats(trades) {
-  let invested=0, openValue=0, realizedPnl=0, openCount=0, closedCount=0;
+  let invested=0, openValue=0, realizedPnl=0, openCount=0, closedCount=0, totalDeployed=0;
   const cat = { nft:{inv:0,val:0}, coin:{inv:0,val:0} };
 
   // Positions (open buys + partial sells), valued at average cost
   for (const g of groupOpenAndSells(trades)) {
     const m = positionMetrics(g);
     realizedPnl += m.realizedUsd;
+    totalDeployed += m.totalInvUsd || 0;
     if (m.remainingQty > 0) {
       openCount++;
       const val = m.openValueUsd != null ? m.openValueUsd : m.remainingCostUsd;
@@ -1892,21 +1849,31 @@ function renderStats(trades) {
     if (t.status === 'closed' && t.kind !== 'sell') {
       closedCount++;
       const usd = entryUsd(t);
+      totalDeployed += usd;
       const proceeds = t.exit?.proceedsUsd ?? usd;
       realizedPnl += proceeds - usd;
     }
   }
   const unrealizedPnl = openValue - invested;
-
-  document.getElementById('s-invested').textContent  = '$'+fmt(invested,2);
-  document.getElementById('s-value').textContent     = '$'+fmt(openValue,2);
-  document.getElementById('s-pnl').textContent       = (unrealizedPnl>=0?'+':'-')+'$'+fmt(Math.abs(unrealizedPnl),2);
-  document.getElementById('s-pnl').className         = 'stat-value '+(unrealizedPnl>=0?'positive':'negative');
-  document.getElementById('s-realized').textContent  = (realizedPnl>=0?'+':'-')+'$'+fmt(Math.abs(realizedPnl),2);
-  document.getElementById('s-realized').className    = 'stat-value '+(realizedPnl>=0?'positive':'negative');
-  document.getElementById('s-realized-sub').textContent = `${closedCount} sold`;
-  document.getElementById('s-count').textContent     = openCount + closedCount;
-  document.getElementById('s-count-sub').textContent = `${openCount} open · ${closedCount} closed`;
+  const totalPnl = realizedPnl + unrealizedPnl;
+  const pos = openCount + closedCount;
+  const money = n => (n>=0?'+':'-')+'$'+fmt(Math.abs(n),2);
+  const cls = n => n>=0?'positive':'negative';
+  const alltime = S.view==='alltime';
+  document.getElementById('cv-current').classList.toggle('active', !alltime);
+  document.getElementById('cv-alltime').classList.toggle('active', alltime);
+  const grid = document.getElementById('crypto-stats');
+  if (grid) grid.innerHTML = !alltime
+    ? statCard('Total Invested','$'+fmt(invested,2),'cost basis, open')
+      + statCard('Open Value','$'+fmt(openValue,2),'at live prices')
+      + statCard('Unrealized P&L',money(unrealizedPnl), invested?`${unrealizedPnl>=0?'+':''}${fmt(unrealizedPnl/invested*100,1)}%`:'open positions', cls(unrealizedPnl))
+      + statCard('Realized P&L',money(realizedPnl),`${closedCount} closed`, cls(realizedPnl))
+      + statCard('Positions',pos,`${openCount} open · ${closedCount} closed`)
+    : statCard('Total Invested','$'+fmt(totalDeployed,2),'all buys incl. closed')
+      + statCard('Total P&L',money(totalPnl), totalDeployed?`${totalPnl>=0?'+':''}${fmt(totalPnl/totalDeployed*100,1)}% on deployed`:'all-time', cls(totalPnl))
+      + statCard('Realized P&L',money(realizedPnl),`${closedCount} closed`, cls(realizedPnl))
+      + statCard('Unrealized P&L',money(unrealizedPnl),`${openCount} open`, cls(unrealizedPnl))
+      + statCard('Positions',pos,`${openCount} open · ${closedCount} closed`);
 
   // Compact NFT vs Token breakdown (open positions, current value + P&L)
   const bd = document.getElementById('s-breakdown');
@@ -2538,6 +2505,12 @@ function iconHtml(url, text, color) {
   return `<div class="asset-icon" style="color:${color||'var(--muted)'}">${t}</div>`;
 }
 function imgFor(key) { return key ? S.assetImg[key] : null; }
+function statCard(label, value, sub, cls) {
+  return `<div class="stat-card"><div class="stat-label">${label}</div>`
+    + `<div class="stat-value ${cls||''}">${value}</div>`
+    + `<div class="stat-sub">${sub||''}</div></div>`;
+}
+function setView(v) { S.view = v; persist(); renderPortfolio(); renderStocks(); }
 function toast(msg) {
   const el = document.getElementById('toast');
   el.textContent = msg; el.classList.add('show');
@@ -2868,31 +2841,32 @@ function renderStockStats(ms) {
     }
   }
   const unreal=value-invested, sym=ccySym(S.baseCcy);
-  const set=(id,v)=>document.getElementById(id).textContent=v;
-  set('st-invested', sym+fmt(invested,2));
-  set('st-value', sym+fmt(value,2));
-  document.getElementById('st-unreal').textContent=(unreal>=0?'+':'-')+sym+fmt(Math.abs(unreal),2);
-  document.getElementById('st-unreal').className='stat-value '+(unreal>=0?'positive':'negative');
-  document.getElementById('st-unreal-pct').textContent = invested?`${unreal>=0?'+':''}${fmt(unreal/invested*100,1)}% unrealised`:'open positions';
-  document.getElementById('st-realized').textContent=(realizedIncome>=0?'+':'-')+sym+fmt(Math.abs(realizedIncome),2);
-  document.getElementById('st-realized').className='stat-value '+(realizedIncome>=0?'positive':'negative');
-  // overall total return % + annualised (XIRR)
-  const overallPct = investedSum ? absSum/investedSum*100 : null;
+  const totalProfit = absSum;                                   // investment P&L + income (incl. closed)
+  const overallPct = investedSum ? totalProfit/investedSum*100 : null;
   const annual = xirr(pflows);
-  const sub=[];
-  if (overallPct!=null) sub.push(`${overallPct>=0?'+':''}${fmt(overallPct,1)}% total`);
-  if (annual!=null) sub.push(`${annual>=0?'+':''}${fmt(annual*100,1)}%/yr`);
-  document.getElementById('st-value-sub').textContent = sub.join(' · ') || 'at live prices';
-
-  // Funded card: net deposits + money-weighted return on funded capital
-  document.getElementById('st-funded').textContent = sym+fmt(netFunded,2);
-  const totalProfit = absSum;                              // investment P&L + income
   const fundedPct = netFunded ? totalProfit/netFunded*100 : null;
   const fundedAnnual = xirr([...fundFlows, { amount: netFunded+totalProfit, date: new Date() }]);
-  const fsub=[];
-  if (fundedPct!=null) fsub.push(`${fundedPct>=0?'+':''}${fmt(fundedPct,1)}% return`);
-  if (fundedAnnual!=null) fsub.push(`${fundedAnnual>=0?'+':''}${fmt(fundedAnnual*100,1)}%/yr`);
-  document.getElementById('st-funded-sub').textContent = fsub.join(' · ') || 'net deposits';
+  const money = n => (n>=0?'+':'-')+sym+fmt(Math.abs(n),2);
+  const cls = n => n>=0?'positive':'negative';
+  const pctyr = (p,a,suffix) => [p!=null?`${p>=0?'+':''}${fmt(p,1)}% ${suffix}`:'', a!=null?`${a>=0?'+':''}${fmt(a*100,1)}%/yr`:''].filter(Boolean).join(' · ');
+
+  const fundedCard = statCard('Funded', sym+fmt(netFunded,2), pctyr(fundedPct, fundedAnnual, 'return') || 'net deposits');
+
+  const alltime = S.view==='alltime';
+  document.getElementById('sv-current').classList.toggle('active', !alltime);
+  document.getElementById('sv-alltime').classList.toggle('active', alltime);
+  const grid = document.getElementById('stocks-stats'); if (!grid) return;
+  grid.innerHTML = !alltime
+    ? fundedCard
+      + statCard('Invested', sym+fmt(invested,2), 'cost basis, open')
+      + statCard('Market Value', sym+fmt(value,2), pctyr(overallPct, annual, 'total') || 'at live prices')
+      + statCard('Unrealized P&L', money(unreal), invested?`${unreal>=0?'+':''}${fmt(unreal/invested*100,1)}% unrealised`:'open positions', cls(unreal))
+      + statCard('Realized + Income', money(realizedIncome), 'incl. dividends', cls(realizedIncome))
+    : fundedCard
+      + statCard('Total Invested', sym+fmt(investedSum,2), 'all buys incl. closed')
+      + statCard('Total P&L', money(totalProfit), pctyr(overallPct, annual, 'on deployed') || 'all-time', cls(totalProfit))
+      + statCard('Realized + Income', money(realizedIncome), 'closed + dividends', cls(realizedIncome))
+      + statCard('Unrealized P&L', money(unreal), `${ms.filter(g=>g.remainingQty>0).length} open`, cls(unreal));
 }
 function stockRowHtml(g) {
   const sym=ccySym(g.ccy);
