@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Crypto P&L Tracker</title>
+<title>InvestTrack</title>
 <style>
 :root {
   --bg: #0d0d0d;
@@ -27,6 +27,12 @@ nav { display: flex; gap: 4px; }
 .tab-btn { padding: 7px 18px; background: none; border: 1px solid transparent; color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 13px; transition: all .15s; }
 .tab-btn:hover { color: var(--text); border-color: var(--border); }
 .tab-btn.active { background: var(--surface2); color: var(--text); border-color: var(--border); }
+
+.nav-item.dropdown { position: relative; }
+.dropdown-menu { position: absolute; top: 100%; left: 0; margin-top: 5px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; min-width: 150px; display: none; z-index: 60; overflow: hidden; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.nav-item.dropdown.open .dropdown-menu { display: block; }
+.dropdown-menu a { display: block; padding: 10px 14px; font-size: 13px; color: var(--text); cursor: pointer; white-space: nowrap; }
+.dropdown-menu a:hover { background: rgba(255,255,255,.06); color: var(--green); }
 
 main { max-width: 1360px; margin: 0 auto; padding: 28px 32px; }
 .tab-pane { display: none; }
@@ -248,12 +254,17 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 <body>
 
 <header>
-  <div class="logo">crypto<span>track</span></div>
+  <div class="logo">Invest<span>Track</span></div>
   <nav>
-    <button class="tab-btn active" onclick="switchTab('portfolio',this)">Crypto</button>
-    <button class="tab-btn" onclick="switchTab('add',this)">+ Add Crypto</button>
-    <button class="tab-btn" onclick="switchTab('stocks',this)">Stocks</button>
-    <button class="tab-btn" onclick="switchTab('settings',this)">Settings</button>
+    <div class="nav-item dropdown" id="dd-crypto">
+      <button class="tab-btn active" id="nav-crypto" onclick="toggleDropdown(event,'dd-crypto')">Crypto ▾</button>
+      <div class="dropdown-menu">
+        <a onclick="switchTab('portfolio')">Overview</a>
+        <a onclick="switchTab('add')">Add Crypto</a>
+      </div>
+    </div>
+    <button class="tab-btn" id="nav-stocks" onclick="switchTab('stocks')">Stocks</button>
+    <button class="tab-btn" id="nav-settings" onclick="switchTab('settings')">Settings</button>
   </nav>
 </header>
 
@@ -460,7 +471,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <div class="stat-card">
       <div class="stat-label">Market Value</div>
       <div class="stat-value" id="st-value">$0.00</div>
-      <div class="stat-sub">at live prices</div>
+      <div class="stat-sub" id="st-value-sub">at live prices</div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Unrealized P&amp;L</div>
@@ -476,7 +487,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
   <div class="card" style="padding:20px 24px;">
     <div class="filter-bar">
-      <span class="card-title" style="margin:0;">Positions</span>
+      <span id="stock-filter" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;"></span>
       <button class="btn btn-secondary" style="margin-left:auto;padding:5px 13px;font-size:12px;" onclick="refreshStockPrices()">↻ Refresh Prices</button>
     </div>
     <div class="table-wrap">
@@ -770,7 +781,8 @@ function isStable(ccy) { return STABLECOINS.has(ccy); }
 // ─── STATE ─────────────────────────────────────────────────
 let S = { trades:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
   sync:{url:'',key:'',code:''}, updatedAt:0,
-  stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 } };   // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
+  stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 },     // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
+  acctNames:{}, stockFilter:'all' };                          // custom portfolio labels per broker; current stocks filter (runtime)
 
 // Grouping: multiple buys of the same asset are merged into one position row.
 let expandedGroups = new Set();   // which group keys are expanded to show individual buys
@@ -855,6 +867,7 @@ function loadState() {
     if (d.stockPx) S.stockPx = d.stockPx;
     if (d.baseCcy) S.baseCcy = d.baseCcy;
     if (d.fx) S.fx = { ...S.fx, ...d.fx };
+    if (d.acctNames) S.acctNames = d.acctNames;
   } catch {}
   document.getElementById('k-eth').value    = S.keys.eth    || '';
   document.getElementById('k-base').value   = S.keys.base   || '';
@@ -866,7 +879,7 @@ function loadState() {
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
   localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt,
-    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx }));
+    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
 function persist() {
@@ -895,7 +908,7 @@ async function pullRemote() {
 async function pushRemote() {
   const { error } = await sb.from('portfolios').upsert(
     { user_id: _user.id, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt,
-        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx }, updated_at: new Date().toISOString() },
+        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames }, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' });
   if (error) throw error;
 }
@@ -928,6 +941,7 @@ async function doPull(announce) {
         if (remote.stockPx) S.stockPx = remote.stockPx;
         if (remote.baseCcy) S.baseCcy = remote.baseCcy;
         if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
+        if (remote.acctNames) S.acctNames = remote.acctNames;
         S.updatedAt = remoteU;
         persistLocal();
         loadState();
@@ -992,21 +1006,26 @@ async function initAuth() {
 }
 
 // ─── TABS ──────────────────────────────────────────────────
-function switchTab(tab, btn) {
+function switchTab(tab) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
-  btn.classList.add('active');
+  const map = { portfolio:'nav-crypto', add:'nav-crypto', stocks:'nav-stocks', settings:'nav-settings' };
+  document.querySelectorAll('nav .tab-btn').forEach(b => b.classList.remove('active'));
+  const nb = document.getElementById(map[tab]); if (nb) nb.classList.add('active');
+  closeDropdowns();
   if (tab === 'portfolio') renderPortfolio();
   if (tab === 'stocks') renderStocks();
 }
-function goPortfolio() {
-  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('tab-portfolio').classList.add('active');
-  document.querySelectorAll('.tab-btn')[0].classList.add('active');
-  renderPortfolio();
+function goPortfolio() { switchTab('portfolio'); }
+function toggleDropdown(ev, id) {
+  ev.stopPropagation();
+  const el = document.getElementById(id);
+  const wasOpen = el.classList.contains('open');
+  closeDropdowns();
+  if (!wasOpen) el.classList.add('open');
 }
+function closeDropdowns() { document.querySelectorAll('.nav-item.dropdown.open').forEach(d => d.classList.remove('open')); }
+document.addEventListener('click', closeDropdowns);
 
 // ─── CHAIN DETECTION ───────────────────────────────────────
 function detectChain(s) {
@@ -2617,30 +2636,68 @@ function editStockPrice(tk) {
   const p = parseFloat(raw); if (isNaN(p)||p<0) { toast('Enter a valid number.'); return; }
   S.stockPx[tk] = { price:p, ts:Date.now() }; persist(); renderStocks();
 }
-function prefillSell(tk, ccy) {
-  switchTab('stocks', document.querySelectorAll('.tab-btn')[2]);
+function prefillSell(tk, ccy, broker) {
+  switchTab('stocks');
   document.getElementById('st-type').value='sell'; updateStockForm();
   document.getElementById('st-ticker').value=tk;
   if (ccy) document.getElementById('st-ccy').value=ccy;
+  if (broker) document.getElementById('st-broker').value=broker;
   document.getElementById('st-shares').focus();
   document.getElementById('st-shares').scrollIntoView({behavior:'smooth', block:'center'});
 }
-function delStockTicker(tk) {
-  if (!confirm(`Remove ALL ${tk} entries (buys, sells, dividends)?`)) return;
-  S.stocks = S.stocks.filter(e => (e.ticker||'').toUpperCase() !== tk);
+function delStock(broker, tk) {
+  if (!confirm(`Remove ALL ${tk} entries in ${acctLabel(broker)} (buys, sells, dividends)?`)) return;
+  S.stocks = S.stocks.filter(e => !((e.ticker||'').toUpperCase()===tk && (e.broker||'other')===broker));
   persist(); renderStocks();
 }
 
-// ── Grouping + average-cost metrics (per ticker, in its native currency) ──
+// Portfolio labels per broker (editable)
+const BROKER_DEF = { moomoo:'Moomoo', tiger:'Tiger', ig:'IG', other:'Other' };
+function acctLabel(b) { return (S.acctNames && S.acctNames[b]) || BROKER_DEF[b] || b; }
+function renameAccount(b) {
+  const n = prompt(`Name this portfolio (${BROKER_DEF[b]||b}):`, acctLabel(b));
+  if (n===null) return;
+  if (n.trim()) S.acctNames[b] = n.trim(); else delete S.acctNames[b];
+  persist(); renderStocks();
+}
+
+// XIRR — money-weighted annualised return from dated cash flows (robust bisection).
+function xirr(flows) {
+  flows = flows.filter(f => isFinite(f.amount) && f.date && !isNaN(f.date));
+  if (flows.length < 2) return null;
+  if (!flows.some(f=>f.amount<0) || !flows.some(f=>f.amount>0)) return null;
+  const t0 = Math.min(...flows.map(f=>f.date.getTime())), tN = Math.max(...flows.map(f=>f.date.getTime()));
+  if (tN - t0 < 14*864e5) return null;                // <2 weeks → annualising is just noise
+  const yr = f => (f.date.getTime()-t0)/(365*864e5);
+  const npv = r => flows.reduce((s,f)=>s+f.amount/Math.pow(1+r,yr(f)),0);
+  let lo=-0.9999, hi=100, flo=npv(lo), fhi=npv(hi);
+  if (!isFinite(flo) || !isFinite(fhi) || flo*fhi>0) return null;   // no sign change → can't solve
+  for (let i=0;i<200;i++) {
+    const mid=(lo+hi)/2, fm=npv(mid);
+    if (!isFinite(fm)) return null;
+    if (Math.abs(fm)<1e-6 || (hi-lo)<1e-7) return mid;
+    if (flo*fm<0) { hi=mid; } else { lo=mid; flo=fm; }
+  }
+  return (lo+hi)/2;
+}
+function stockFlows(g, m) {
+  const fl=[];
+  for (const b of g.buys)  fl.push({ amount:-(_sn(b.shares)*_sn(b.price)+_sn(b.fees)), date:new Date(b.date) });
+  for (const s of g.sells) fl.push({ amount:(_sn(s.shares)*_sn(s.price)-_sn(s.fees)), date:new Date(s.date) });
+  for (const d of g.divs)  fl.push({ amount:_sn(d.amount), date:new Date(d.date) });
+  if (m.remainingQty>0 && m.marketValue!=null) fl.push({ amount:m.marketValue, date:new Date() });
+  return fl;
+}
+
+// ── Grouping + average-cost metrics (per ticker PER BROKER, in native currency) ──
 function stockGroups() {
   const map = new Map();
   for (const e of S.stocks) {
     if (e.kind==='interest') continue;
     if (e.kind==='dividend' && !e.ticker) continue;
-    const tk=(e.ticker||'').toUpperCase(), key=tk+'|'+(e.ccy||'USD');
-    if (!map.has(key)) map.set(key, { ticker:tk, ccy:e.ccy||'USD', name:e.name||'', brokers:new Set(), buys:[], sells:[], divs:[] });
+    const tk=(e.ticker||'').toUpperCase(), broker=e.broker||'other', key=broker+'|'+tk+'|'+(e.ccy||'USD');
+    if (!map.has(key)) map.set(key, { ticker:tk, broker, ccy:e.ccy||'USD', name:e.name||'', buys:[], sells:[], divs:[] });
     const g=map.get(key);
-    if (e.broker) g.brokers.add(e.broker);
     if (e.name && !g.name) g.name=e.name;
     if (e.kind==='sell') g.sells.push(e); else if (e.kind==='dividend') g.divs.push(e); else g.buys.push(e);
   }
@@ -2655,76 +2712,115 @@ function stockMetrics(g) {
   const remainingCost=avgCost*remainingQty;
   const realized=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)-avgCost*_sn(x.shares)),0);
   const dividends=g.divs.reduce((s,d)=>s+_sn(d.amount),0);
+  const proceeds=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)),0);
   const px=S.stockPx[g.ticker]?.price ?? null;
   const marketValue=px!=null?px*remainingQty:null;
   const unrealized=marketValue!=null?marketValue-remainingCost:null;
-  return { ...g, totalBought, avgCost, soldQty, remainingQty, remainingCost, realized, dividends, px, marketValue, unrealized };
+  const openVal = marketValue!=null ? marketValue : (remainingQty>0?remainingCost:0);
+  const absReturn = proceeds + dividends + openVal - totalCost;
+  const returnPct = totalCost ? absReturn/totalCost*100 : null;
+  const m = { ...g, totalBought, avgCost, soldQty, remainingQty, remainingCost, realized, dividends,
+    proceeds, totalInvested:totalCost, px, marketValue, unrealized, absReturn, returnPct };
+  m.annual = xirr(stockFlows(g, m));
+  return m;
 }
+
+function renderStockFilterBar() {
+  const el = document.getElementById('stock-filter'); if (!el) return;
+  const brokers = [...new Set(S.stocks.map(e=>e.broker||'other'))];
+  let html = `<button class="filter-btn ${S.stockFilter==='all'?'active':''}" onclick="setStockFilter('all')">All</button>`;
+  for (const b of brokers) {
+    html += `<button class="filter-btn ${S.stockFilter===b?'active':''}" onclick="setStockFilter('${b}')">${esc(acctLabel(b))}`
+      + ` <span onclick="event.stopPropagation();renameAccount('${b}')" title="Rename portfolio" style="opacity:.55;margin-left:3px;">✎</span></button>`;
+  }
+  el.innerHTML = html;
+}
+function setStockFilter(b) { S.stockFilter = b; renderStocks(); }
 
 function renderStocks() {
   document.getElementById('ccy-usd').classList.toggle('active', S.baseCcy==='USD');
   document.getElementById('ccy-sgd').classList.toggle('active', S.baseCcy==='SGD');
+  renderStockFilterBar();
   const body=document.getElementById('stocks-body'), table=document.getElementById('stocks-table'), empty=document.getElementById('stocks-empty');
-  const ms = stockGroups().map(stockMetrics).sort((a,b)=>(b.marketValue||b.remainingCost||0)-(a.marketValue||a.remainingCost||0));
   if (!S.stocks.length) { table.style.display='none'; empty.style.display='block'; renderStockStats([]); return; }
   table.style.display=''; empty.style.display='none';
-  body.innerHTML = ms.map(stockRowHtml).join('');
+  let ms = stockGroups().map(stockMetrics);
+  if (S.stockFilter!=='all') ms = ms.filter(g=>g.broker===S.stockFilter);
+  ms.sort((a,b)=>(b.marketValue||b.remainingCost||0)-(a.marketValue||a.remainingCost||0));
+  body.innerHTML = ms.map(stockRowHtml).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;">No positions in this portfolio.</td></tr>';
   renderStockStats(ms);
 }
 function renderStockStats(ms) {
-  let invested=0, value=0, realizedIncome=0;
+  let invested=0, value=0, realizedIncome=0, absSum=0, investedSum=0;
+  const pflows=[];
   for (const g of ms) {
     if (g.remainingQty>0) { invested+=toBase(g.remainingCost,g.ccy); value+=toBase(g.marketValue!=null?g.marketValue:g.remainingCost,g.ccy); }
     realizedIncome += toBase(g.realized+g.dividends, g.ccy);
+    absSum += toBase(g.absReturn, g.ccy); investedSum += toBase(g.totalInvested, g.ccy);
+    for (const f of stockFlows(g, g)) pflows.push({ amount: toBase(f.amount, g.ccy), date: f.date });
   }
-  for (const e of S.stocks) { if (e.kind==='interest' || (e.kind==='dividend'&&!e.ticker)) realizedIncome += toBase(_sn(e.amount), e.ccy||'USD'); }
+  for (const e of S.stocks) {
+    if ((e.kind==='interest' || (e.kind==='dividend'&&!e.ticker)) && (S.stockFilter==='all'||e.broker===S.stockFilter)) {
+      realizedIncome += toBase(_sn(e.amount), e.ccy||'USD'); absSum += toBase(_sn(e.amount), e.ccy||'USD');
+      pflows.push({ amount: toBase(_sn(e.amount), e.ccy||'USD'), date: new Date(e.date) });
+    }
+  }
   const unreal=value-invested, sym=ccySym(S.baseCcy);
   const set=(id,v)=>document.getElementById(id).textContent=v;
   set('st-invested', sym+fmt(invested,2));
   set('st-value', sym+fmt(value,2));
   document.getElementById('st-unreal').textContent=(unreal>=0?'+':'-')+sym+fmt(Math.abs(unreal),2);
   document.getElementById('st-unreal').className='stat-value '+(unreal>=0?'positive':'negative');
-  document.getElementById('st-unreal-pct').textContent = invested?`${unreal>=0?'+':''}${fmt(unreal/invested*100,1)}%`:'open positions';
+  document.getElementById('st-unreal-pct').textContent = invested?`${unreal>=0?'+':''}${fmt(unreal/invested*100,1)}% unrealised`:'open positions';
   document.getElementById('st-realized').textContent=(realizedIncome>=0?'+':'-')+sym+fmt(Math.abs(realizedIncome),2);
   document.getElementById('st-realized').className='stat-value '+(realizedIncome>=0?'positive':'negative');
+  // overall total return % + annualised (XIRR)
+  const overallPct = investedSum ? absSum/investedSum*100 : null;
+  const annual = xirr(pflows);
+  const sub=[];
+  if (overallPct!=null) sub.push(`${overallPct>=0?'+':''}${fmt(overallPct,1)}% total`);
+  if (annual!=null) sub.push(`${annual>=0?'+':''}${fmt(annual*100,1)}%/yr`);
+  document.getElementById('st-value-sub').textContent = sub.join(' · ') || 'at live prices';
 }
 function stockRowHtml(g) {
-  const sym=ccySym(g.ccy), brokers=[...g.brokers].join(', ');
+  const sym=ccySym(g.ccy);
   const closed = g.remainingQty<=0;
   const sharesCell = (closed?'<span class="neutral">closed</span>':fmt(g.remainingQty, g.remainingQty%1?4:0))
     + (g.soldQty>0 && !closed ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmt(g.soldQty,0)} of ${fmt(g.totalBought,0)}</span>`:'');
-  // price cell
   let priceCell;
   if (g.px!=null) priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')">${sym}${fmt(g.px,2)}</span>`;
   else priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')" style="color:var(--muted);font-size:11px;">click / refresh</span>`;
-  // value
   const valCell = closed ? '<span class="neutral">—</span>'
     : g.marketValue!=null ? `${sym}${fmt(g.marketValue,2)}${g.ccy!==S.baseCcy?` <span style="color:var(--muted);font-size:11px;">${ccySym(S.baseCcy)}${fmt(toBase(g.marketValue,g.ccy),2)}</span>`:''}` : '<span class="neutral">—</span>';
-  // pnl: unrealized main + realized/dividend sub
-  let pnlCellH;
+  // P&L cell: main figure + sub lines (realized/div, then total% · annualised)
   const subBits=[];
-  if (Math.abs(g.realized)>0.005) subBits.push(`${g.realized>=0?'+':'-'}${sym}${fmt(Math.abs(g.realized),2)} realized`);
+  if (Math.abs(g.realized)>0.005) subBits.push(`${g.realized>=0?'+':'-'}${sym}${fmt(Math.abs(g.realized),2)} real`);
   if (g.dividends>0.005) subBits.push(`+${sym}${fmt(g.dividends,2)} div`);
-  const sub = subBits.length?`<span style="display:block;color:var(--muted);font-size:11px;">${subBits.join(' · ')}</span>`:'';
+  const retBits=[];
+  if (g.returnPct!=null) retBits.push(`${g.returnPct>=0?'+':''}${fmt(g.returnPct,1)}% tot`);
+  if (g.annual!=null) retBits.push(`${g.annual>=0?'+':''}${fmt(g.annual*100,1)}%/yr`);
+  const sub = [subBits.join(' · '), retBits.join(' · ')].filter(Boolean)
+    .map(t=>`<span style="display:block;color:var(--muted);font-size:11px;">${t}</span>`).join('');
+  let pnlCellH;
   if (closed) {
     const tot=g.realized+g.dividends;
-    pnlCellH=`<span class="${tot>=0?'positive':'negative'}">${tot>=0?'+':'-'}${sym}${fmt(Math.abs(tot),2)}</span> <span style="font-size:11px;color:var(--muted);">realized</span>`;
+    pnlCellH=`<span class="${tot>=0?'positive':'negative'}">${tot>=0?'+':'-'}${sym}${fmt(Math.abs(tot),2)}</span> <span style="font-size:11px;color:var(--muted);">realised</span>${sub}`;
   } else if (g.unrealized!=null) {
     const pct=g.remainingCost?g.unrealized/g.remainingCost*100:null;
     pnlCellH=`<span class="${g.unrealized>=0?'positive':'negative'}">${g.unrealized>=0?'+':'-'}${sym}${fmt(Math.abs(g.unrealized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${g.unrealized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}${sub}`;
   } else pnlCellH=`<span class="neutral">—</span>${sub}`;
   const actions = closed
-    ? `<button class="action-btn del" title="Remove" onclick="delStockTicker('${g.ticker}')">×</button>`
-    : `<button class="action-btn" title="Sell" onclick="prefillSell('${g.ticker}','${g.ccy}')">Sell</button>
+    ? `<button class="action-btn del" title="Remove" onclick="delStock('${g.broker}','${g.ticker}')">×</button>`
+    : `<button class="action-btn" title="Sell" onclick="prefillSell('${g.ticker}','${g.ccy}','${g.broker}')">Sell</button>
        <button class="action-btn" title="Refresh price" onclick="refreshStockPrices()">↻</button>
-       <button class="action-btn del" title="Remove" onclick="delStockTicker('${g.ticker}')">×</button>`;
+       <button class="action-btn del" title="Remove" onclick="delStock('${g.broker}','${g.ticker}')">×</button>`;
   return `<tr class="${closed?'row-closed':''}">
     <td>
       <div class="asset-cell">
         <div class="asset-icon" style="color:var(--blue)">${(g.ticker||'?').slice(0,4)}</div>
         <div>
           <div class="asset-name">${esc(g.ticker)}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
-          <div class="asset-sub">${esc(g.name||'')}${brokers?` · ${esc(brokers)}`:''}</div>
+          <div class="asset-sub">${esc(g.name||'')} · ${esc(acctLabel(g.broker))}</div>
         </div>
       </div>
     </td>
