@@ -175,11 +175,66 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .sell-row td:first-child { border-left: 3px solid rgba(255,77,77,.4); }
 
 @media (max-width: 768px) {
-  main { padding: 16px; }
-  .stats-grid { grid-template-columns: 1fr 1fr; }
+  body { font-size: 15px; }
+  main { padding: 14px; }
+  /* inline grid-template on the portfolio stats grid needs !important to stack */
+  .stats-grid { grid-template-columns: 1fr 1fr !important; gap: 10px; }
+  .stat-card { padding: 14px; }
+  .stat-value { font-size: 19px; }
   .form-grid, .form-grid-3 { grid-template-columns: 1fr; }
   .result-grid { grid-template-columns: 1fr; }
-  header { padding: 14px 16px; }
+  header { padding: 14px 16px; flex-wrap: wrap; gap: 10px; }
+  nav { flex-wrap: wrap; }
+  .tab-btn { padding: 8px 14px; }
+  .filter-btn { padding: 7px 14px; font-size: 12.5px; }
+  main .card { padding: 14px !important; }
+
+  /* ── Portfolio table → cards ── */
+  #trades-table thead { display: none; }
+  #trades-table, #trades-table tbody, #trades-table tr, #trades-table td { display: block; width: 100%; }
+  #trades-table tr {
+    border: 1px solid var(--border); border-radius: 12px; margin-bottom: 14px;
+    background: var(--surface); overflow: hidden;
+  }
+  #trades-table tr:hover td { background: transparent; }
+  #trades-table td {
+    padding: 9px 16px; border: none; text-align: right; overflow: hidden; min-height: 38px;
+    font-size: 13.5px;
+  }
+  #trades-table td::before {
+    float: left; color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .5px; text-align: left; font-weight: 600; padding-top: 1px;
+  }
+  #trades-table td:nth-child(2)::before { content: "Chain"; }
+  #trades-table td:nth-child(3)::before { content: "Amount"; }
+  #trades-table td:nth-child(4)::before { content: "Entry (no fee)"; }
+  #trades-table td:nth-child(5)::before { content: "Entry (w/ fee)"; }
+  #trades-table td:nth-child(6)::before { content: "Price"; }
+  #trades-table td:nth-child(7)::before { content: "Value"; }
+  #trades-table td:nth-child(8)::before { content: "P&L"; }
+
+  /* asset = card header (full width, no label) */
+  #trades-table td:first-child {
+    text-align: left; background: rgba(255,255,255,.025);
+    border-bottom: 1px solid var(--border); padding: 13px 16px;
+  }
+  #trades-table td:first-child::before { display: none; }
+  /* actions = card footer with full-width buttons */
+  #trades-table td:last-child { text-align: left; padding: 12px 16px; }
+  #trades-table td:last-child::before { display: none; }
+  #trades-table .trade-actions { display: flex; gap: 8px; }
+  #trades-table .action-btn { flex: 1; text-align: center; padding: 10px 0; font-size: 13px; }
+
+  /* keep position/buy/sell cues as a left accent on the whole card */
+  #trades-table .pos-row  { border-left: 3px solid var(--blue); }
+  #trades-table .lot-row  { border-left: 3px solid var(--border); margin-left: 16px; }
+  #trades-table .sell-row { border-left: 3px solid rgba(255,77,77,.5); }
+  #trades-table .pos-row td, #trades-table .lot-row td, #trades-table .sell-row td { background: transparent; border-left: none; padding-left: 16px; }
+  #trades-table .lot-row td:first-child, #trades-table .sell-row td:first-child,
+  #trades-table .pos-row td:first-child { border-left: none; }
+
+  /* sell modal fills the screen comfortably */
+  #sell-modal > div { width: 100%; padding: 20px; }
 }
 </style>
 </head>
