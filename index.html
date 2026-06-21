@@ -34,6 +34,14 @@ nav { display: flex; gap: 4px; }
 .dropdown-menu a { display: block; padding: 10px 14px; font-size: 13px; color: var(--text); cursor: pointer; white-space: nowrap; }
 .dropdown-menu a:hover { background: rgba(255,255,255,.06); color: var(--green); }
 
+/* Privacy mode — blur sensitive money figures */
+body.private .stat-value,
+body.private #s-breakdown,
+body.private #trades-table td:nth-child(n+3):nth-child(-n+8),
+body.private #stocks-table td:nth-child(n+2):nth-child(-n+6) {
+  filter: blur(8px); -webkit-filter: blur(8px); user-select: none; pointer-events: none;
+}
+
 main { max-width: 1360px; margin: 0 auto; padding: 28px 32px; }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
@@ -263,8 +271,15 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
         <a onclick="switchTab('add')">Add Crypto</a>
       </div>
     </div>
-    <button class="tab-btn" id="nav-stocks" onclick="switchTab('stocks')">Stocks</button>
+    <div class="nav-item dropdown" id="dd-stocks">
+      <button class="tab-btn" id="nav-stocks" onclick="toggleDropdown(event,'dd-stocks')">Stocks ▾</button>
+      <div class="dropdown-menu">
+        <a onclick="switchTab('stocks')">Overview</a>
+        <a onclick="switchTab('stocks-add')">Add Stock</a>
+      </div>
+    </div>
     <button class="tab-btn" id="nav-settings" onclick="switchTab('settings')">Settings</button>
+    <button class="tab-btn" id="privacy-btn" title="Hide/show sensitive figures" onclick="togglePrivacy()" style="margin-left:4px;">👁</button>
   </nav>
 </header>
 
@@ -505,6 +520,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     </div>
   </div>
 
+</div>
+
+<!-- ═══════════════════════════════ ADD STOCK ═══════════════════════════════ -->
+<div class="tab-pane" id="tab-stocks-add">
   <div class="card">
     <div class="card-title">Import broker CSV</div>
     <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">Export your trade history from <strong style="color:var(--text)">moomoo</strong> or <strong style="color:var(--text)">Tiger</strong> and drop the file here. The format is auto-detected; trades you've already imported are skipped.</p>
@@ -1009,12 +1028,13 @@ async function initAuth() {
 function switchTab(tab) {
   document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
   document.getElementById('tab-'+tab).classList.add('active');
-  const map = { portfolio:'nav-crypto', add:'nav-crypto', stocks:'nav-stocks', settings:'nav-settings' };
-  document.querySelectorAll('nav .tab-btn').forEach(b => b.classList.remove('active'));
+  const map = { portfolio:'nav-crypto', add:'nav-crypto', stocks:'nav-stocks', 'stocks-add':'nav-stocks', settings:'nav-settings' };
+  document.querySelectorAll('nav .tab-btn').forEach(b => { if (b.id!=='privacy-btn') b.classList.remove('active'); });
   const nb = document.getElementById(map[tab]); if (nb) nb.classList.add('active');
   closeDropdowns();
   if (tab === 'portfolio') renderPortfolio();
   if (tab === 'stocks') renderStocks();
+  if (tab === 'stocks-add') updateStockForm();
 }
 function goPortfolio() { switchTab('portfolio'); }
 function toggleDropdown(ev, id) {
@@ -1026,6 +1046,19 @@ function toggleDropdown(ev, id) {
 }
 function closeDropdowns() { document.querySelectorAll('.nav-item.dropdown.open').forEach(d => d.classList.remove('open')); }
 document.addEventListener('click', closeDropdowns);
+
+// Privacy mode — blur sensitive figures (device-local preference)
+function togglePrivacy() {
+  const on = !document.body.classList.contains('private');
+  document.body.classList.toggle('private', on);
+  localStorage.setItem('ctrack_private', on ? '1' : '');
+  document.getElementById('privacy-btn').textContent = on ? '🙈' : '👁';
+}
+function applyPrivacy() {
+  const on = !!localStorage.getItem('ctrack_private');
+  document.body.classList.toggle('private', on);
+  const b = document.getElementById('privacy-btn'); if (b) b.textContent = on ? '🙈' : '👁';
+}
 
 // ─── CHAIN DETECTION ───────────────────────────────────────
 function detectChain(s) {
@@ -2598,9 +2631,9 @@ function addStockManual() {
     if (!amount) { toast('Enter an amount.'); return; }
     Object.assign(e, { ticker: t==='dividend'?ticker:'', name, amount });
   }
-  S.stocks.push(e); persist(); renderStocks();
+  S.stocks.push(e); persist();
   ['st-ticker','st-name','st-shares','st-price','st-fees','st-amount','st-note'].forEach(id=>document.getElementById(id).value='');
-  toast('Added ✓');
+  toast('Added ✓'); switchTab('stocks');
 }
 
 // ── FX + live prices ──
@@ -2835,6 +2868,7 @@ function stockRowHtml(g) {
 
 // ─── INIT ──────────────────────────────────────────────────
 loadState();
+applyPrivacy();
 updateStockForm();
 renderPortfolio();
 renderStocks();
