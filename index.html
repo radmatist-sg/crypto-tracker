@@ -1,0 +1,2307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Crypto P&L Tracker</title>
+<style>
+:root {
+  --bg: #0d0d0d;
+  --surface: #161616;
+  --surface2: #1e1e1e;
+  --border: #2a2a2a;
+  --text: #e8e8e8;
+  --muted: #777;
+  --green: #00d084;
+  --red: #ff4d4d;
+  --blue: #4d9fff;
+  --gold: #f5a623;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; font-size: 14px; }
+
+header { display: flex; align-items: center; justify-content: space-between; padding: 18px 32px; border-bottom: 1px solid var(--border); }
+.logo { font-size: 17px; font-weight: 700; letter-spacing: -0.5px; }
+.logo span { color: var(--green); }
+nav { display: flex; gap: 4px; }
+.tab-btn { padding: 7px 18px; background: none; border: 1px solid transparent; color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 13px; transition: all .15s; }
+.tab-btn:hover { color: var(--text); border-color: var(--border); }
+.tab-btn.active { background: var(--surface2); color: var(--text); border-color: var(--border); }
+
+main { max-width: 1360px; margin: 0 auto; padding: 28px 32px; }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 16px; }
+.card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 16px; }
+
+label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+input, select, textarea { width: 100%; background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 9px 13px; font-size: 13px; font-family: inherit; outline: none; transition: border-color .15s; }
+input:focus, select:focus, textarea:focus { border-color: var(--green); }
+select option { background: var(--surface2); }
+textarea { resize: vertical; }
+
+.form-row { margin-bottom: 14px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.form-grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+.btn { padding: 9px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
+.btn-primary { background: var(--green); color: #000; }
+.btn-primary:hover { opacity: .9; }
+.btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.btn-secondary:hover { border-color: var(--green); }
+.btn-danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+.btn-danger:hover { background: rgba(255,77,77,.1); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Stats */
+.stats-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 20px; }
+.stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+.stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; }
+.stat-value { font-size: 22px; font-weight: 700; letter-spacing: -.5px; }
+.stat-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+.neutral { color: var(--muted); }
+
+/* Filter bar */
+.filter-bar { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; align-items: center; }
+.filter-btn { padding: 5px 13px; border: 1px solid var(--border); border-radius: 20px; font-size: 12px; cursor: pointer; background: none; color: var(--muted); transition: all .15s; }
+.filter-btn:hover { color: var(--text); }
+.filter-btn.active { background: var(--surface2); color: var(--text); border-color: var(--text); }
+
+/* Table */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); padding: 10px 11px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+td { padding: 13px 11px; border-bottom: 1px solid rgba(42,42,42,.5); font-size: 13px; vertical-align: middle; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,.02); }
+
+.asset-cell { display: flex; align-items: center; gap: 10px; }
+.asset-icon { width: 34px; height: 34px; border-radius: 8px; background: var(--surface2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 11px; flex-shrink: 0; }
+.asset-name { font-weight: 600; }
+.asset-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.asset-sub a { color: var(--muted); text-decoration: underline; cursor: pointer; }
+
+/* Badges */
+.chain-badge { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+.chain-ethereum { background: rgba(98,126,234,.15); color: #627eea; }
+.chain-base { background: rgba(0,82,255,.15); color: #4d7fff; }
+.chain-arbitrum { background: rgba(40,160,240,.15); color: #28a0f0; }
+.chain-solana { background: rgba(153,69,255,.15); color: #9945ff; }
+.type-badge { display: inline-flex; padding: 2px 7px; border-radius: 4px; font-size: 10px; font-weight: 700; margin-left: 5px; }
+.type-coin { background: rgba(245,166,35,.15); color: var(--gold); }
+.type-nft { background: rgba(0,208,132,.15); color: var(--green); }
+
+/* Action buttons */
+.trade-actions { display: flex; gap: 6px; }
+.action-btn { padding: 3px 9px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); background: none; color: var(--muted); transition: all .15s; }
+.action-btn:hover { color: var(--text); border-color: var(--text); }
+.action-btn.del:hover { color: var(--red); border-color: var(--red); }
+
+/* Chain selector */
+.chain-selector { display: flex; gap: 8px; flex-wrap: wrap; }
+.chain-opt { padding: 7px 16px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; background: var(--surface2); color: var(--muted); transition: all .15s; }
+.chain-opt:hover { border-color: var(--text); color: var(--text); }
+.chain-opt.selected { border-color: var(--green); color: var(--green); background: rgba(0,208,132,.08); }
+
+/* Result grid */
+.result-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+.result-item { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+.result-item.highlight { border-color: var(--green); }
+.result-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 5px; }
+.result-value { font-size: 16px; font-weight: 700; }
+.result-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+/* Alerts */
+.alert { padding: 11px 15px; border-radius: 8px; font-size: 13px; margin: 10px 0; }
+.alert-error { background: rgba(255,77,77,.1); border: 1px solid rgba(255,77,77,.3); color: #ff8080; }
+.alert-success { background: rgba(0,208,132,.1); border: 1px solid rgba(0,208,132,.3); color: var(--green); }
+.alert-info { background: rgba(77,159,255,.1); border: 1px solid rgba(77,159,255,.3); color: var(--blue); }
+
+/* Loading spinner */
+.spin { display: inline-block; width: 13px; height: 13px; border: 2px solid rgba(255,255,255,.1); border-top-color: var(--green); border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: 6px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Empty state */
+.empty { text-align: center; padding: 56px 20px; color: var(--muted); }
+.empty-icon { font-size: 36px; margin-bottom: 10px; }
+.empty h3 { font-size: 15px; color: var(--text); margin-bottom: 6px; }
+
+/* Toast */
+.toast { position: fixed; bottom: 22px; right: 22px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 11px 18px; font-size: 13px; display: none; z-index: 999; box-shadow: 0 4px 20px rgba(0,0,0,.4); }
+.toast.show { display: block; animation: fadeUp .2s ease; }
+@keyframes fadeUp { from { transform: translateY(8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+/* Parse section */
+.parse-result { display: none; }
+.parse-result.visible { display: block; }
+
+details summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 4px 0; }
+details summary:hover { color: var(--text); }
+details[open] summary { margin-bottom: 14px; }
+
+hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+
+/* Inline price edit */
+.price-cell { cursor: pointer; }
+.price-cell:hover { text-decoration: underline; text-decoration-style: dashed; }
+.price-input-inline { width: 90px; background: var(--surface2); border: 1px solid var(--green); color: var(--text); border-radius: 4px; padding: 3px 6px; font-size: 12px; outline: none; }
+
+/* Closed trade row */
+.row-closed td { opacity: .65; }
+.closed-badge { display:inline-flex;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(136,136,136,.15);color:var(--muted);margin-left:5px; }
+
+/* Grouped position rows — the blended "position" summary */
+.pos-row td { background: rgba(77,159,255,.06); border-top: 1px solid rgba(77,159,255,.25); }
+.pos-row:hover td { background: rgba(77,159,255,.09); }
+.pos-row td:first-child { border-left: 3px solid var(--blue); }
+.pos-row .asset-name { font-weight: 700; }
+.pos-toggle { display:flex; align-items:center; cursor:pointer; }
+.pos-caret { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border:1px solid var(--border); border-radius:6px; background:var(--surface2); color:var(--text); font-size:11px; user-select:none; flex-shrink:0; transition:all .15s; }
+.pos-toggle:hover .pos-caret { border-color:var(--blue); color:var(--blue); }
+.pos-badge { display:inline-flex;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;background:var(--blue);color:#001;margin-left:8px;letter-spacing:.5px; }
+
+/* Individual buy (lot) rows shown when a position is expanded */
+.lot-row td { background: rgba(0,0,0,.25); }
+.lot-row td:first-child { border-left: 3px solid var(--border); padding-left: 36px; position: relative; }
+.lot-row .asset-icon { width:24px; height:24px; font-size:9px; }
+.lot-row .asset-name { font-weight:500; font-size:12.5px; color:var(--muted); }
+.lot-prefix { color:var(--blue); margin-right:7px; font-weight:700; }
+.sold-badge { display:inline-flex;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(255,77,77,.15);color:var(--red);margin-left:6px;letter-spacing:.5px; }
+.sell-row td { background: rgba(255,77,77,.06); }
+.sell-row td:first-child { border-left: 3px solid rgba(255,77,77,.4); }
+
+@media (max-width: 768px) {
+  main { padding: 16px; }
+  .stats-grid { grid-template-columns: 1fr 1fr; }
+  .form-grid, .form-grid-3 { grid-template-columns: 1fr; }
+  .result-grid { grid-template-columns: 1fr; }
+  header { padding: 14px 16px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">crypto<span>track</span></div>
+  <nav>
+    <button class="tab-btn active" onclick="switchTab('portfolio',this)">Portfolio</button>
+    <button class="tab-btn" onclick="switchTab('add',this)">+ Add Trade</button>
+    <button class="tab-btn" onclick="switchTab('settings',this)">Settings</button>
+  </nav>
+</header>
+
+<main>
+
+<!-- ═══════════════════════════════ PORTFOLIO ═══════════════════════════════ -->
+<div class="tab-pane active" id="tab-portfolio">
+  <div class="stats-grid" style="grid-template-columns:repeat(5,1fr);">
+    <div class="stat-card">
+      <div class="stat-label">Total Invested</div>
+      <div class="stat-value" id="s-invested">$0.00</div>
+      <div class="stat-sub">cost basis with fees</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Open Value</div>
+      <div class="stat-value" id="s-value">$0.00</div>
+      <div class="stat-sub">at live prices</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Unrealized P&amp;L</div>
+      <div class="stat-value" id="s-pnl">$0.00</div>
+      <div class="stat-sub" id="s-pnl-pct">open positions</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Realized P&amp;L</div>
+      <div class="stat-value" id="s-realized">$0.00</div>
+      <div class="stat-sub" id="s-realized-sub">closed positions</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Positions</div>
+      <div class="stat-value" id="s-count">0</div>
+      <div class="stat-sub" id="s-count-sub">0 open · 0 closed</div>
+    </div>
+  </div>
+
+  <div id="s-breakdown" style="margin:-8px 2px 18px;font-size:12.5px;color:var(--muted);"></div>
+
+  <div class="card" style="padding:20px 24px;">
+    <div class="filter-bar">
+      <button class="filter-btn active" onclick="setFilter('all',this)">All</button>
+      <button class="filter-btn" onclick="setFilter('coin',this)">Coins</button>
+      <button class="filter-btn" onclick="setFilter('nft',this)">NFTs</button>
+      <button class="filter-btn" onclick="setFilter('ethereum',this)">Ethereum</button>
+      <button class="filter-btn" onclick="setFilter('base',this)">Base</button>
+      <button class="filter-btn" onclick="setFilter('arbitrum',this)">Arbitrum</button>
+      <button class="filter-btn" onclick="setFilter('solana',this)">Solana</button>
+      <button class="btn btn-secondary" style="margin-left:auto;padding:5px 13px;font-size:12px;" onclick="refreshPrices()">↻ Refresh Prices</button>
+    </div>
+    <div class="table-wrap">
+      <table id="trades-table">
+        <thead>
+          <tr>
+            <th>Asset</th>
+            <th>Chain</th>
+            <th>Amount</th>
+            <th>Entry (no fees)</th>
+            <th>Entry (w/ fees)</th>
+            <th>Current Price</th>
+            <th>Current Value</th>
+            <th>P&amp;L</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="trades-body"></tbody>
+      </table>
+      <div class="empty" id="empty-state">
+        <div class="empty-icon">📊</div>
+        <h3>No trades yet</h3>
+        <p>Go to "Add Trade" and paste a transaction hash to get started</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ ADD TRADE ═══════════════════════════════ -->
+<div class="tab-pane" id="tab-add">
+  <div class="card">
+    <div class="card-title">Fetch from Transaction</div>
+    <div class="form-row">
+      <label>Transaction Hash or Explorer URL</label>
+      <textarea id="tx-input" rows="2" placeholder="Paste a tx hash (0x...) or a link from Etherscan, Basescan, Arbiscan, Solscan, Solana.fm…"></textarea>
+    </div>
+    <div class="form-row">
+      <label>Chain — auto-detected, or select manually</label>
+      <div class="chain-selector">
+        <div class="chain-opt" data-chain="ethereum" onclick="pickChain('ethereum',this)">Ethereum</div>
+        <div class="chain-opt" data-chain="base" onclick="pickChain('base',this)">Base</div>
+        <div class="chain-opt" data-chain="arbitrum" onclick="pickChain('arbitrum',this)">Arbitrum</div>
+        <div class="chain-opt" data-chain="solana" onclick="pickChain('solana',this)">Solana</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
+      <button class="btn btn-primary" id="fetch-btn" onclick="fetchTx()">Fetch Transaction</button>
+      <span id="fetch-status" style="font-size:12px;color:var(--muted);"></span>
+    </div>
+  </div>
+
+  <div class="parse-result" id="parse-result">
+    <div class="card">
+      <div class="card-title">Parsed Result</div>
+      <div id="parse-alert"></div>
+
+      <div class="result-grid">
+        <div class="result-item">
+          <div class="result-label">Asset</div>
+          <div class="result-value" id="r-asset">—</div>
+          <div class="result-sub" id="r-asset-sub">—</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">Amount Received</div>
+          <div class="result-value" id="r-amount">—</div>
+          <div class="result-sub" id="r-amount-sub">—</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">Cost — No Fees</div>
+          <div class="result-value" id="r-no-fee">—</div>
+          <div class="result-sub" id="r-no-fee-usd">—</div>
+        </div>
+        <div class="result-item highlight">
+          <div class="result-label">Cost — With Fees ✓</div>
+          <div class="result-value" id="r-with-fee">—</div>
+          <div class="result-sub" id="r-with-fee-usd">—</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">Gas / Network Fee</div>
+          <div class="result-value" id="r-gas">—</div>
+          <div class="result-sub" id="r-gas-usd">—</div>
+        </div>
+        <div class="result-item">
+          <div class="result-label">Date</div>
+          <div class="result-value" id="r-date">—</div>
+          <div class="result-sub" id="r-type">—</div>
+        </div>
+      </div>
+
+      <details>
+        <summary>Edit / override parsed values</summary>
+        <div class="form-grid">
+          <div class="form-row"><label>Asset Name</label><input id="e-name" placeholder="e.g. PEPE"></div>
+          <div class="form-row"><label>Symbol</label><input id="e-symbol" placeholder="e.g. PEPE"></div>
+          <div class="form-row"><label>Contract / Mint Address</label><input id="e-contract" placeholder="0x…"></div>
+          <div class="form-row"><label>Amount Received</label><input id="e-amount" type="number" placeholder="0"></div>
+          <div class="form-row"><label>Cost Without Fees (ETH/SOL)</label><input id="e-cost" type="number" step="0.000001" placeholder="0.00"></div>
+          <div class="form-row">
+            <label>Type</label>
+            <select id="e-type"><option value="coin">Coin / Token</option><option value="nft">NFT</option></select>
+          </div>
+        </div>
+      </details>
+
+      <div class="form-row" style="margin-top:12px;">
+        <label>Notes (optional)</label>
+        <input id="trade-notes" placeholder="e.g. floor snipe, presale, whitelist mint…">
+      </div>
+      <button class="btn btn-primary" onclick="addTrade()">Add to Portfolio</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>Add trade manually (no transaction hash)</summary>
+      <div class="form-grid" style="margin-top:4px;">
+        <div class="form-row"><label>Asset Name</label><input id="m-name" placeholder="e.g. BAYC"></div>
+        <div class="form-row"><label>Symbol</label><input id="m-symbol" placeholder="e.g. BAYC"></div>
+        <div class="form-row"><label>Contract / Mint Address</label><input id="m-contract" placeholder="0x…"></div>
+        <div class="form-row">
+          <label>Chain</label>
+          <select id="m-chain">
+            <option value="ethereum">Ethereum</option>
+            <option value="base">Base</option>
+            <option value="arbitrum">Arbitrum</option>
+            <option value="solana">Solana</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Type</label>
+          <select id="m-type"><option value="coin">Coin / Token</option><option value="nft">NFT</option></select>
+        </div>
+        <div class="form-row"><label>Amount</label><input id="m-amount" type="number" placeholder="1"></div>
+        <div class="form-row"><label>Cost Without Fees (ETH/SOL)</label><input id="m-cost" type="number" step="0.000001" placeholder="0.00"></div>
+        <div class="form-row"><label>Gas / Network Fees (ETH/SOL)</label><input id="m-fees" type="number" step="0.000001" placeholder="0.00"></div>
+        <div class="form-row"><label>ETH/SOL Price at Entry (USD)</label><input id="m-native-usd" type="number" placeholder="e.g. 3500"></div>
+        <div class="form-row"><label>Date</label><input id="m-date" type="date"></div>
+      </div>
+      <div class="form-row"><label>Notes</label><input id="m-notes" placeholder="optional"></div>
+      <button class="btn btn-primary" onclick="addManual()">Add to Portfolio</button>
+    </details>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ SETTINGS ═══════════════════════════════ -->
+<div class="tab-pane" id="tab-settings">
+  <!-- Cloud Sync (Supabase) -->
+  <div class="card" style="border-color:#3ecf8e44;">
+    <div class="card-title" style="color:#3ecf8e;">Cloud Sync — phone &amp; laptop (Supabase)</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">
+      Keep the same trades on every device. Set this up once per device — paste the three values below and hit <strong style="color:var(--text)">Connect</strong>. Use the <strong style="color:var(--text)">same sync code</strong> on your phone and laptop to link them.
+    </p>
+    <div class="form-grid">
+      <div class="form-row"><label>Supabase Project URL</label><input id="k-sb-url" placeholder="https://xxxx.supabase.co"></div>
+      <div class="form-row"><label>Supabase anon key</label><input id="k-sb-key" placeholder="eyJhbGci…"></div>
+    </div>
+    <div class="form-row">
+      <label>Sync code (your private link between devices)</label>
+      <div style="display:flex;gap:8px;">
+        <input id="k-sb-code" placeholder="a long secret code" style="flex:1;">
+        <button class="btn btn-secondary" style="white-space:nowrap;" onclick="genSyncCode()">Generate</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
+      <button class="btn btn-primary" onclick="connectSync()">Connect</button>
+      <button class="btn btn-secondary" onclick="syncNow()">Sync now</button>
+      <span id="sync-status" style="font-size:12px;color:var(--muted);"></span>
+    </div>
+    <details style="margin-top:16px;">
+      <summary>First-time setup — create your free Supabase backend (≈5 min)</summary>
+      <ol style="font-size:13px;color:var(--muted);padding-left:18px;line-height:1.9;margin-top:10px;">
+        <li>Go to <strong style="color:var(--text)">supabase.com</strong> → sign up (free) → <strong style="color:var(--text)">New project</strong>. Pick any name &amp; password, wait ~2 min for it to build.</li>
+        <li>Open the <strong style="color:var(--text)">SQL Editor</strong> (left sidebar), paste the snippet below, and click <strong style="color:var(--text)">Run</strong>:</li>
+      </ol>
+      <pre style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11.5px;overflow-x:auto;color:var(--text);line-height:1.5;">create table if not exists tracker (
+  id text primary key,
+  data jsonb,
+  updated_at timestamptz default now()
+);
+alter table tracker enable row level security;
+create policy "sync access" on tracker
+  for all to anon using (true) with check (true);</pre>
+      <ol start="3" style="font-size:13px;color:var(--muted);padding-left:18px;line-height:1.9;">
+        <li>Go to <strong style="color:var(--text)">Project Settings → API</strong>. Copy the <strong style="color:var(--text)">Project URL</strong> and the <strong style="color:var(--text)">anon public</strong> key into the boxes above.</li>
+        <li>Click <strong style="color:var(--text)">Generate</strong> for a sync code, then <strong style="color:var(--text)">Connect</strong>.</li>
+        <li>On your phone, open the same site, paste the <strong style="color:var(--text)">same three values</strong> (same sync code!), and Connect. Done — they now share data.</li>
+      </ol>
+      <p style="font-size:12px;color:var(--muted);margin-top:8px;">Your data sits in your own private Supabase project. The anon key only lives on your devices, never in the public page.</p>
+    </details>
+  </div>
+
+  <!-- DexScreener — Solana live prices -->
+  <div class="card" style="border-color:#1dbe9433;">
+    <div class="card-title" style="color:#1dbe94;">Solana — Live Prices (DexScreener)</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+      Prices for open Solana trades are fetched automatically from DexScreener — no API key needed. Covers virtually every token including new meme coins.
+    </p>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="testJupiter()">Test Connection</button>
+      <span id="jupiter-test-result" style="font-size:12px;color:var(--muted);"></span>
+    </div>
+  </div>
+
+  <!-- Solana (Helius) - required for Solana support -->
+  <div class="card" style="border-color:#9945ff33;">
+    <div class="card-title" style="color:#9945ff;">Solana — Helius API Key (required)</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+      The public Solana RPC blocks browser requests. Helius is free and takes 30 seconds to set up.
+    </p>
+    <ol style="font-size:13px;color:var(--muted);margin-bottom:16px;padding-left:18px;line-height:2;">
+      <li>Go to <strong style="color:var(--text)">helius.dev</strong> and sign up (free)</li>
+      <li>Copy your API key from the dashboard</li>
+      <li>Paste it below and hit Save</li>
+    </ol>
+    <div class="form-row">
+      <label>Helius API Key</label>
+      <input id="k-helius" placeholder="your-helius-api-key-here">
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">OpenSea — NFT Floor Prices</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">Used to auto-fetch live NFT floor prices (in ETH) when you hit ↻ on an NFT. Free key from <strong style="color:var(--text)">opensea.io</strong> → Developer → API Keys.</p>
+    <div class="form-row">
+      <label>OpenSea API Key</label>
+      <input id="k-opensea" placeholder="your-opensea-api-key…">
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">EVM Chains — Block Explorer Keys <span style="font-size:11px;color:var(--muted);font-weight:400;">(no longer needed — transactions now use a keyless public connection)</span></div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:18px;">Free keys from each chain's explorer. Sign up, grab a key, paste below.</p>
+    <div class="form-grid">
+      <div class="form-row">
+        <label>Etherscan — Ethereum</label>
+        <input id="k-eth" placeholder="YourEtherscanApiKey…">
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">etherscan.io → Sign In → API Keys</div>
+      </div>
+      <div class="form-row">
+        <label>BaseScan — Base</label>
+        <input id="k-base" placeholder="YourBaseScanApiKey…">
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">basescan.org → Sign In → API Keys</div>
+      </div>
+      <div class="form-row">
+        <label>Arbiscan — Arbitrum</label>
+        <input id="k-arb" placeholder="YourArbiscanApiKey…">
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">arbiscan.io → Sign In → API Keys</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Data</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="exportData()">Export JSON</button>
+      <button class="btn btn-secondary" onclick="document.getElementById(\'import-file\').click()">Import JSON</button>
+      <input type="file" id="import-file" accept=".json" style="display:none" onchange="importData(event)">
+      <button class="btn btn-danger" onclick="clearAll()">Clear All Data</button>
+    </div>
+  </div>
+</div>
+
+</main>
+<div class="toast" id="toast"></div>
+
+<!-- ── SELL MODAL ────────────────────────────────────────── -->
+<div id="sell-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px;width:460px;max-width:94vw;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+      <h3 style="font-size:15px;font-weight:700;" id="sell-modal-title">Close Position</h3>
+      <button onclick="closeSellModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;">×</button>
+    </div>
+
+    <!-- Entry summary -->
+    <div id="sell-modal-summary" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:18px;font-size:12px;color:var(--muted);line-height:1.9;"></div>
+
+    <!-- Fetch sell tx -->
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:18px;">
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px;">Auto-fill from sell transaction</div>
+      <div style="display:flex;gap:8px;">
+        <input id="sell-tx-input" placeholder="Paste sell tx hash or URL…" style="flex:1;font-size:12px;">
+        <button id="sell-fetch-btn" class="btn btn-secondary" style="padding:8px 14px;font-size:12px;white-space:nowrap;" onclick="fetchSellTx()">Fetch</button>
+      </div>
+      <div id="sell-fetch-status" style="font-size:12px;color:var(--muted);margin-top:8px;min-height:16px;"></div>
+      <!-- Parsed proceeds breakdown (shown after fetch) -->
+      <div id="sell-parsed-result" style="display:none;margin-top:12px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Proceeds — No Fees</div>
+            <div style="font-weight:700;" id="sp-no-fee">—</div>
+            <div style="font-size:11px;color:var(--muted);" id="sp-no-fee-usd">—</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--green);border-radius:6px;padding:10px;">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Proceeds — With Fees ✓</div>
+            <div style="font-weight:700;" id="sp-with-fee">—</div>
+            <div style="font-size:11px;color:var(--muted);" id="sp-with-fee-usd">—</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">Sell Fee</div>
+            <div style="font-weight:700;" id="sp-fee">—</div>
+            <div style="font-size:11px;color:var(--muted);" id="sp-fee-usd">—</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px;">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">P&amp;L (after all fees)</div>
+            <div style="font-weight:700;" id="sp-pnl">—</div>
+            <div style="font-size:11px;color:var(--muted);" id="sp-pnl-pct">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manual fields -->
+    <div class="form-grid">
+      <div class="form-row" style="grid-column:1 / -1;">
+        <label id="sell-qty-label">Quantity to Sell</label>
+        <input type="number" id="sell-qty" step="0.000001" placeholder="0">
+        <div id="sell-qty-hint" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
+      </div>
+      <div class="form-row">
+        <label>Proceeds Amount</label>
+        <input type="number" id="sell-proceeds" step="0.000001" placeholder="0.00">
+      </div>
+      <div class="form-row">
+        <label>Currency</label>
+        <select id="sell-ccy">
+          <option value="USD">USD ($)</option>
+          <option value="USDC">USDC</option>
+          <option value="ETH">ETH</option>
+          <option value="SOL">SOL</option>
+        </select>
+      </div>
+      <div class="form-row" id="sell-rate-row">
+        <label id="sell-rate-label">ETH Price at Sale (USD)</label>
+        <input type="number" id="sell-rate" placeholder="e.g. 3500">
+      </div>
+      <div class="form-row">
+        <label>Date of Sale</label>
+        <input type="date" id="sell-date">
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Notes (optional)</label>
+      <input type="text" id="sell-notes" placeholder="e.g. took profits, stop loss…">
+    </div>
+    <div style="display:flex;gap:10px;margin-top:4px;">
+      <button class="btn btn-primary" onclick="submitSell()">Confirm Sale</button>
+      <button class="btn btn-secondary" onclick="closeSellModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── CONFIG ────────────────────────────────────────────────
+const CHAINS = {
+  ethereum: { name:'Ethereum', ccy:'ETH', decimals:18, rpc:'https://ethereum-rpc.publicnode.com',     chainid:1,     cg:'ethereum',     color:'#627eea' },
+  base:     { name:'Base',     ccy:'ETH', decimals:18, rpc:'https://base-rpc.publicnode.com',         chainid:8453,  cg:'base',         color:'#4d7fff' },
+  arbitrum: { name:'Arbitrum', ccy:'ETH', decimals:18, rpc:'https://arbitrum-one-rpc.publicnode.com', chainid:42161, cg:'arbitrum-one', color:'#28a0f0' },
+  solana:   { name:'Solana',   ccy:'SOL', decimals:9,  api:null,                              cg:'solana',       color:'#9945ff' }
+};
+const NATIVE_CG = { ethereum:'ethereum', base:'ethereum', arbitrum:'ethereum', solana:'solana' };
+const DS_CHAIN  = { ethereum:'ethereum', base:'base', arbitrum:'arbitrum', solana:'solana' };
+const CG = 'https://api.coingecko.com/api/v3';
+
+// Well-known Solana token mints → symbol/name
+const SOL_TOKENS = {
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { symbol:'USDC', name:'USD Coin' },
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': { symbol:'USDT', name:'Tether USD' },
+  'So11111111111111111111111111111111111111112':   { symbol:'SOL',  name:'Wrapped SOL' },
+  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So': { symbol:'mSOL', name:'Marinade SOL' },
+  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263': { symbol:'BONK', name:'Bonk' },
+  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN':  { symbol:'JUP',  name:'Jupiter' },
+  'WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk':  { symbol:'WEN',  name:'Wen' },
+};
+// Currencies treated as stablecoins (USD-pegged, nativeUsd = 1)
+const STABLECOINS = new Set(['USDC','USDT','DAI','BUSD','FRAX','USDS']);
+function isStable(ccy) { return STABLECOINS.has(ccy); }
+
+// ─── STATE ─────────────────────────────────────────────────
+let S = { trades:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
+  sync:{url:'',key:'',code:''}, updatedAt:0 };
+
+// Grouping: multiple buys of the same asset are merged into one position row.
+let expandedGroups = new Set();   // which group keys are expanded to show individual buys
+let _groups = [];                 // current render's [{key, lots}] — indexed by row handlers
+function groupKey(t) {
+  const id = (t.asset.contract || t.asset.name || '').toLowerCase();
+  return `${t.chain}|${t.type}|${id}`;
+}
+function toggleGroup(i) {
+  const g = _groups[i]; if (!g) return;
+  if (expandedGroups.has(g.key)) expandedGroups.delete(g.key); else expandedGroups.add(g.key);
+  renderPortfolio();
+}
+// Keep every open buy of the same asset on the same live price.
+function syncGroupPrice(t) {
+  const k = groupKey(t);
+  S.trades.forEach(x => { if (x.status !== 'closed' && x.kind !== 'sell' && groupKey(x) === k) x.priceLive = t.priceLive; });
+}
+
+// A "buy" is a normal open trade; a "sell" record (kind:'sell') logs a partial/
+// full exit of a position. Legacy fully-closed buys (old flow) are handled apart.
+function isBuy(t)  { return t.kind !== 'sell' && t.status !== 'closed'; }
+function isSell(t) { return t.kind === 'sell'; }
+
+// Group open buys + their sell records by asset. Only groups with ≥1 buy returned.
+function groupOpenAndSells(trades) {
+  const map = new Map();
+  for (const t of trades) {
+    if (t.status === 'closed' && t.kind !== 'sell') continue;   // legacy closed → rendered separately
+    const k = groupKey(t);
+    if (!map.has(k)) map.set(k, { key:k, buys:[], sells:[] });
+    (isSell(t) ? map.get(k).sells : map.get(k).buys).push(t);
+  }
+  return [...map.values()].filter(g => g.buys.length);
+}
+function groupByKey(key) {
+  const g = { key, buys:[], sells:[] };
+  for (const t of S.trades) {
+    if (groupKey(t) !== key) continue;
+    if (t.status === 'closed' && t.kind !== 'sell') continue;
+    (isSell(t) ? g.sells : g.buys).push(t);
+  }
+  return g;
+}
+
+// Average-cost metrics for a position (buys + partial sells).
+function positionMetrics(g) {
+  const buys = g.buys, sells = g.sells, t0 = buys[0];
+  const isNft = t0.type === 'nft';
+  const totalBought = buys.reduce((s,b)=>s+(b.asset.amount||0),0);
+  const totalInvUsd = buys.reduce((s,b)=>s+(entryUsd(b)||0),0);
+  const avgCostUsd  = totalBought ? totalInvUsd/totalBought : 0;     // per coin / per NFT
+  const soldQty     = sells.reduce((s,x)=>s+(x.sell.qty||0),0);
+  const remainingQty = Math.max(0, totalBought - soldQty);
+  const remainingCostUsd = avgCostUsd * remainingQty;
+  const realizedUsd = sells.reduce((s,x)=>s+((x.sell.proceedsUsd||0) - avgCostUsd*(x.sell.qty||0)),0);
+  const totNoFee = buys.reduce((s,b)=>s+(b.entry.noFee||0),0);
+  const totWith  = buys.reduce((s,b)=>s+(b.entry.withFee||0),0);
+  const priceLot = buys.find(b=>b.priceLive!==null);
+  const livePrice = priceLot ? priceLot.priceLive : null;
+  let openValueUsd = null, openValueEth = null;
+  if (livePrice !== null) {
+    if (isNft) { openValueEth = livePrice*remainingQty; openValueUsd = openValueEth*(S.ethUsd||0); }
+    else openValueUsd = livePrice*remainingQty;
+  }
+  const unrealizedUsd = openValueUsd != null ? openValueUsd - remainingCostUsd : null;
+  return { isNft, t0, count:buys.length, totalBought, totalInvUsd, avgCostUsd, soldQty,
+    remainingQty, remainingCostUsd, realizedUsd, totNoFee, totWith, livePrice,
+    openValueUsd, openValueEth, unrealizedUsd, ccy:t0.entry.ccy };
+}
+
+// ─── PERSIST ───────────────────────────────────────────────
+function loadState() {
+  try {
+    const d = JSON.parse(localStorage.getItem('ctrack') || '{}');
+    S.trades = d.trades || [];
+    if (d.keys) S.keys = { ...S.keys, ...d.keys };
+    if (d.ethUsd) S.ethUsd = d.ethUsd;   // last known ETH price, for instant NFT USD display
+    if (d.sync) S.sync = { ...S.sync, ...d.sync };
+    if (d.updatedAt) S.updatedAt = d.updatedAt;
+  } catch {}
+  document.getElementById('k-eth').value    = S.keys.eth    || '';
+  document.getElementById('k-base').value   = S.keys.base   || '';
+  document.getElementById('k-arb').value    = S.keys.arb    || '';
+  document.getElementById('k-helius').value  = S.keys.helius  || '';
+  document.getElementById('k-opensea').value = S.keys.opensea || '';
+  document.getElementById('k-sb-url').value  = S.sync.url  || '';
+  document.getElementById('k-sb-key').value  = S.sync.key  || '';
+  document.getElementById('k-sb-code').value = S.sync.code || '';
+}
+// Write to this device's local storage only (no cloud push).
+function persistLocal() {
+  localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt }));
+}
+// Save a change: stamp it, store locally, and queue a cloud sync.
+function persist() {
+  S.updatedAt = Date.now();
+  persistLocal();
+  schedulePush();
+}
+
+// ─── CLOUD SYNC (Supabase) ─────────────────────────────────
+// All trades live in a single row keyed by your private sync code. Each device
+// is configured once in Settings; nothing secret lives in the page itself.
+let _syncBusy = false, _pushTimer = null;
+function syncEnabled() { const c = S.sync; return !!(c && c.url && c.key && c.code); }
+function setSyncStatus(msg, kind) {
+  const el = document.getElementById('sync-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = kind==='err' ? 'var(--red)' : kind==='ok' ? 'var(--green)' : 'var(--muted)';
+}
+function sbHeaders() {
+  const k = S.sync.key;
+  return { 'apikey':k, 'Authorization':`Bearer ${k}`, 'Content-Type':'application/json' };
+}
+function sbBase() { return S.sync.url.replace(/\/+$/,'') + '/rest/v1/tracker'; }
+
+async function pullRemote() {
+  const url = `${sbBase()}?id=eq.${encodeURIComponent(S.sync.code)}&select=data`;
+  const r = await fetch(url, { headers: sbHeaders() });
+  if (!r.ok) throw new Error('HTTP '+r.status);
+  const rows = await r.json();
+  return rows[0]?.data || null;
+}
+async function pushRemote() {
+  const body = [{ id: S.sync.code, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt }, updated_at: new Date().toISOString() }];
+  const r = await fetch(sbBase(), { method:'POST', headers:{ ...sbHeaders(), 'Prefer':'resolution=merge-duplicates' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('HTTP '+r.status);
+}
+
+function schedulePush() {
+  if (!syncEnabled()) return;
+  clearTimeout(_pushTimer);
+  _pushTimer = setTimeout(doPush, 1200);   // debounce rapid edits
+}
+async function doPush() {
+  if (!syncEnabled() || _syncBusy) return;
+  _syncBusy = true; setSyncStatus('Saving…');
+  try { await pushRemote(); setSyncStatus('Synced ✓', 'ok'); }
+  catch(e) { setSyncStatus('Sync error — check Settings', 'err'); }
+  finally { _syncBusy = false; }
+}
+// Pull the cloud copy; adopt it if it's newer than this device's data.
+async function doPull(announce) {
+  if (!syncEnabled()) return;
+  setSyncStatus('Checking…');
+  try {
+    const remote = await pullRemote();
+    if (remote) {
+      const remoteU = remote.updatedAt || 0;
+      if (remoteU > (S.updatedAt || 0)) {
+        S.trades = remote.trades || S.trades;
+        if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
+        if (remote.ethUsd) S.ethUsd = remote.ethUsd;
+        S.updatedAt = remoteU;
+        persistLocal();
+        loadState();           // refresh settings fields with synced keys
+        renderPortfolio();
+        setSyncStatus('Synced ✓ (updated from cloud)', 'ok');
+        if (announce) toast('Pulled latest from cloud ✓');
+      } else {
+        setSyncStatus('Synced ✓', 'ok');
+        if ((S.updatedAt || 0) > remoteU) doPush();   // this device is ahead
+        else if (announce) toast('Already up to date ✓');
+      }
+    } else {
+      await doPush();          // nothing in the cloud yet → seed it
+      setSyncStatus('Synced ✓ (first upload)', 'ok');
+      if (announce) toast('Uploaded to cloud ✓');
+    }
+  } catch(e) {
+    setSyncStatus('Sync error — check Settings', 'err');
+    if (announce) toast('Could not connect — check your Supabase details.');
+  }
+}
+function syncNow() { doPull(true); }
+
+// ─── TABS ──────────────────────────────────────────────────
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+  btn.classList.add('active');
+  if (tab === 'portfolio') renderPortfolio();
+}
+function goPortfolio() {
+  document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-portfolio').classList.add('active');
+  document.querySelectorAll('.tab-btn')[0].classList.add('active');
+  renderPortfolio();
+}
+
+// ─── CHAIN DETECTION ───────────────────────────────────────
+function detectChain(s) {
+  if (/etherscan\.io/i.test(s))  return 'ethereum';
+  if (/basescan\.org/i.test(s))  return 'base';
+  if (/arbiscan\.io/i.test(s))   return 'arbitrum';
+  if (/solscan\.io|solana\.fm|explorer\.solana/i.test(s)) return 'solana';
+  // Raw hash: 0x = EVM (unknown chain), else check Solana sig length
+  const clean = s.trim();
+  if (!clean.startsWith('0x') && /^[A-Za-z0-9]{80,110}$/.test(clean)) return 'solana';
+  return null;
+}
+function extractHash(s) {
+  const evm = s.match(/0x[a-fA-F0-9]{64}/);
+  if (evm) return evm[0];
+  const url = s.match(/\/([A-Za-z0-9]{80,110})(?:[?#]|$)/);
+  if (url) return url[1];
+  const clean = s.trim();
+  if (/^[A-Za-z0-9]{80,110}$/.test(clean)) return clean;
+  return null;
+}
+function pickChain(chain, el) {
+  document.querySelectorAll('.chain-opt').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+  S.chain = chain;
+}
+
+document.getElementById('tx-input').addEventListener('input', function() {
+  const detected = detectChain(this.value);
+  if (detected) {
+    S.chain = detected;
+    document.querySelectorAll('.chain-opt').forEach(o =>
+      o.classList.toggle('selected', o.dataset.chain === detected));
+  }
+});
+
+// ─── EVM FETCH ─────────────────────────────────────────────
+// Public JSON-RPC call — no API key needed, returns complete standard data.
+async function rpcCall(chain, method, params) {
+  const r = await fetch(CHAINS[chain].rpc, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ jsonrpc:'2.0', id:1, method, params })
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(`RPC error: ${d.error.message}`);
+  return d.result;
+}
+
+async function fetchEvm(chain, hash) {
+  const [tx, rc] = await Promise.all([
+    rpcCall(chain, 'eth_getTransactionByHash',  [hash]),
+    rpcCall(chain, 'eth_getTransactionReceipt', [hash])
+  ]);
+  if (!tx) throw new Error('Transaction not found. Check the hash and chain.');
+  if (!rc) throw new Error('Could not load the transaction receipt.');
+
+  const gasEth = (parseInt(rc.gasUsed,16) * parseInt(tx.gasPrice,16)) / 1e18;
+  const valueEth = parseInt(tx.value,16) / 1e18;
+
+  const blk = await rpcCall(chain, 'eth_getBlockByNumber', [tx.blockNumber, false]);
+  const ts = blk ? parseInt(blk.timestamp,16) : null;
+
+  // Read transfer events straight from the receipt logs. (The account
+  // endpoints filter by wallet address, not by tx hash, so they return
+  // nothing for a single transaction — this works regardless of who
+  // submitted the tx, e.g. an OpenSea offer accepted by the seller.)
+  const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+  const T1155    = '0xc3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aaa1a1c0154';
+  const toAddr = t => '0x' + t.slice(26);
+  const hexBig = h => { try { return BigInt(h).toString(); } catch { return '0'; } };
+  const tokens = [], nfts = [], e1155 = [];
+  for (const l of (rc.logs || [])) {
+    const t0 = (l.topics[0] || '').toLowerCase();
+    if (t0 === TRANSFER && l.topics.length === 4) {
+      nfts.push({ contractAddress:l.address, from:toAddr(l.topics[1]), to:toAddr(l.topics[2]),
+        tokenID: hexBig(l.topics[3]), tokenName:'', tokenSymbol:'' });
+    } else if (t0 === TRANSFER && l.topics.length === 3) {
+      tokens.push({ contractAddress:l.address, from:toAddr(l.topics[1]), to:toAddr(l.topics[2]),
+        value: hexBig(l.data || '0x0'), tokenDecimal:'18', tokenName:'', tokenSymbol:'' });
+    } else if (t0 === T1155) {
+      const data = (l.data || '').slice(2);
+      e1155.push({ contractAddress:l.address, from:toAddr(l.topics[2]), to:toAddr(l.topics[3]),
+        tokenID: hexBig('0x'+data.slice(0,64)), tokenValue: hexBig('0x'+data.slice(64,128)),
+        tokenName:'', tokenSymbol:'' });
+    }
+  }
+
+  // Look up name / symbol / decimals for each contract involved.
+  const decStr = hex => {
+    if (!hex || hex.length < 130) return '';
+    const len = parseInt(hex.slice(66,130),16) || 0;
+    let s=''; for (let i=0;i<len;i++) s+=String.fromCharCode(parseInt(hex.substr(130+i*2,2),16));
+    return s.replace(/[^\x20-\x7e]/g,'').trim();
+  };
+  const callRaw = async (to, data) => {
+    try { return (await rpcCall(chain, 'eth_call', [{ to, data }, 'latest'])) || ''; }
+    catch { return ''; }
+  };
+  const contracts = [...new Set([...tokens,...nfts,...e1155].map(x => x.contractAddress.toLowerCase()))];
+  const meta = {};
+  await Promise.all(contracts.map(async c => {
+    const [nm, sy, dc] = await Promise.all([
+      callRaw(c,'0x06fdde03'), callRaw(c,'0x95d89b41'), callRaw(c,'0x313ce567')]);
+    meta[c] = { name:decStr(nm), symbol:decStr(sy), decimals:(dc && dc!=='0x') ? parseInt(dc,16) : 18 };
+  }));
+  const apply = x => {
+    const m = meta[x.contractAddress.toLowerCase()];
+    if (m) { x.tokenName=m.name; x.tokenSymbol=m.symbol; if ('tokenDecimal' in x) x.tokenDecimal=String(m.decimals); }
+  };
+  tokens.forEach(apply); nfts.forEach(apply); e1155.forEach(apply);
+
+  return { chain, hash, from:tx.from, valueEth, gasEth, ts, tokens, nfts, e1155 };
+}
+
+function parseEvm(d) {
+  const { chain, from, valueEth, gasEth, ts, tokens, nfts, e1155 } = d;
+  const date = ts ? new Date(ts*1000).toISOString() : new Date().toISOString();
+  const ccy  = CHAINS[chain].ccy;
+
+  // ─── NFT received (ERC-721 or ERC-1155) ───────────────────
+  // The submitter (`from`) isn't always the buyer: on OpenSea offer-
+  // acceptances the seller submits the tx and the NFT is sent to you.
+  // So pick the NFT received by `from` if present, else take the first
+  // NFT transferred and treat its recipient as the owner (you).
+  const pickNft = list => {
+    if (!list.length) return null;
+    return list.find(t => t.to.toLowerCase() === from.toLowerCase()) || list[0];
+  };
+  const n721  = pickNft(nfts);
+  const n1155 = pickNft(e1155);
+  const n     = n721 || n1155;
+  if (n) {
+    const owner = n.to.toLowerCase();           // the address that received the NFT (you)
+    // Cost: plain ETH if the owner sent it, otherwise the WETH/ERC-20 the owner paid.
+    let noFee = (from.toLowerCase() === owner) ? valueEth : 0;
+    let costCcy = ccy;
+    if (noFee === 0) {
+      // A bid/offer splits payment into several transfers (seller + marketplace fee
+      // + royalty). Sum everything the buyer paid, grouped by token, and use the
+      // token they spent the most of — that total is the true acquisition cost.
+      const paid = tokens.filter(t => t.from.toLowerCase() === owner);
+      const byTok = {};
+      for (const p of paid) {
+        const dec = parseInt(p.tokenDecimal||'18');
+        const amt = Number(BigInt(p.value)) / 10**dec;
+        const k = p.contractAddress.toLowerCase();
+        if (!byTok[k]) byTok[k] = { amt:0, sym:p.tokenSymbol };
+        byTok[k].amt += amt;
+      }
+      const best = Object.values(byTok).sort((a,b)=>b.amt-a.amt)[0];
+      if (best) {
+        noFee = best.amt;
+        // WETH is priced 1:1 with ETH — show it in the chain currency
+        costCcy = /^W?ETH$/i.test(best.sym) ? ccy : (best.sym || ccy);
+      }
+    }
+    return { type:'nft', name:n.tokenName||'Unknown NFT', symbol:n.tokenSymbol||'?',
+      contract:n.contractAddress, tokenId:n.tokenID, amount:n1155&&!n721?parseInt(n.tokenValue||'1'):1,
+      noFee, fee:gasEth, withFee:noFee+gasEth, ccy:costCcy, feeCcy:ccy, date };
+  }
+  // ERC-20 token received (DEX swap)
+  const gotTok = tokens.filter(t => t.to.toLowerCase() === from.toLowerCase());
+  if (gotTok.length) {
+    const t = gotTok[0];
+    const dec = parseInt(t.tokenDecimal||'18');
+    const amount = parseInt(t.value) / 10**dec;
+    let noFee = valueEth, costCcy = ccy;
+    if (valueEth === 0) {
+      // Stablecoin swap — find what was sent
+      const sent = tokens.filter(x => x.from.toLowerCase() === from.toLowerCase());
+      if (sent.length) {
+        const sd = parseInt(sent[0].tokenDecimal||'6');
+        noFee = parseInt(sent[0].value) / 10**sd;
+        costCcy = sent[0].tokenSymbol;
+      }
+    }
+    return { type:'coin', name:t.tokenName||'Unknown', symbol:t.tokenSymbol||'?',
+      contract:t.contractAddress, tokenId:null, amount,
+      noFee, fee:gasEth, withFee:noFee+(valueEth>0?gasEth:gasEth),
+      ccy:costCcy, feeCcy:ccy, date };
+  }
+  // Fallback
+  if (valueEth > 0) {
+    return { type:'coin', name:'Unknown', symbol:'?', contract:d.hash, tokenId:null, amount:valueEth,
+      noFee:valueEth, fee:gasEth, withFee:valueEth+gasEth, ccy, feeCcy:ccy, date,
+      note:'Could not identify received asset — edit the details below.' };
+  }
+  throw new Error('Could not parse this transaction. Try adding manually.');
+}
+
+// ─── SOLANA FETCH ──────────────────────────────────────────
+async function fetchSolana(sig) {
+  const key = S.keys.helius;
+  if (!key) throw new Error(
+    'Solana requires a Helius API key. Go to Settings → paste your free key from helius.dev'
+  );
+  const rpc = `https://mainnet.helius-rpc.com/?api-key=${key}`;
+  const r = await fetch(rpc, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ jsonrpc:'2.0', id:1, method:'getTransaction',
+      params:[sig, { encoding:'jsonParsed', maxSupportedTransactionVersion:0 }] })
+  });
+  const d = await r.json();
+  if (d.error) throw new Error(`Solana RPC error: ${d.error.message}`);
+  if (!d.result) throw new Error('Transaction not found. It may be too old, or check the signature is correct.');
+  return { sig, chain:'solana', tx:d.result };
+}
+
+function parseSolana(d) {
+  const { sig, tx } = d;
+  const meta = tx.meta;
+  const date = tx.blockTime ? new Date(tx.blockTime*1000).toISOString() : new Date().toISOString();
+  const fee  = (meta.fee||0) / 1e9; // SOL
+
+  // Signer is always account index 0
+  const accounts = tx.transaction.message.accountKeys || [];
+  const signerPub = typeof accounts[0]==='string' ? accounts[0] : accounts[0]?.pubkey;
+
+  const preB  = meta.preBalances  || [];
+  const postB = meta.postBalances || [];
+  const solChange = (preB[0] - postB[0]) / 1e9; // positive = signer spent SOL
+
+  const preTok  = meta.preTokenBalances  || [];
+  const postTok = meta.postTokenBalances || [];
+
+  // Only look at token accounts owned by the signer
+  const signerPre  = preTok.filter(t => t.owner === signerPub);
+  const signerPost = postTok.filter(t => t.owner === signerPub);
+
+  // Build per-mint balance change for the signer
+  const allMints = new Set([...signerPre.map(t=>t.mint), ...signerPost.map(t=>t.mint)]);
+  const received = [], sent = [];
+  for (const mint of allMints) {
+    const pre  = signerPre.find(t=>t.mint===mint);
+    const post = signerPost.find(t=>t.mint===mint);
+    const preAmt  = parseFloat(pre?.uiTokenAmount?.uiAmountString  || '0');
+    const postAmt = parseFloat(post?.uiTokenAmount?.uiAmountString || '0');
+    const delta = postAmt - preAmt;
+    const info = SOL_TOKENS[mint] || { symbol: mint.slice(0,6)+'…', name: mint.slice(0,8)+'…' };
+    if (delta > 0) received.push({ mint, amount: delta, ...info });
+    if (delta < 0) sent.push({ mint, amount: Math.abs(delta), ...info });
+  }
+
+  // Determine cost currency and amount
+  let noFee, withFee, ccy;
+  if (sent.length > 0) {
+    // Paid with a token (USDC, another SPL token, etc.)
+    const s = sent[0];
+    noFee   = s.amount;
+    withFee = s.amount; // fee is in SOL, tracked separately
+    ccy     = s.symbol;
+  } else if (solChange > fee + 0.00001) {
+    // Paid with SOL (swap or NFT buy)
+    noFee   = Math.max(0, solChange - fee);
+    withFee = solChange;
+    ccy     = 'SOL';
+  } else {
+    // Only fee paid — transaction type unclear
+    noFee = 0; withFee = 0; ccy = 'SOL';
+  }
+
+  if (received.length > 0) {
+    const r = received[0];
+    const note = SOL_TOKENS[r.mint]
+      ? `Bought ${r.amount.toLocaleString()} ${r.symbol} for ${fmt(noFee,4)} ${ccy}`
+      : `Mint: ${r.mint} — edit the name/symbol above.`;
+    return { type:'coin', name:r.name, symbol:r.symbol, contract:r.mint,
+      tokenId:null, amount:r.amount, noFee, fee, withFee, ccy, feeCcy:'SOL', date, note };
+  }
+
+  // No token received — likely an NFT (no token account change visible in SPL)
+  return { type:'nft', name:'Unknown NFT', symbol:'?', contract:null,
+    tokenId:null, amount:1, noFee, fee, withFee, ccy, feeCcy:'SOL', date,
+    note:'Could not identify the NFT — edit the details below.' };
+}
+
+// ─── FETCH TX (main) ───────────────────────────────────────
+async function fetchTx() {
+  const raw = document.getElementById('tx-input').value.trim();
+  if (!raw) { toast('Paste a transaction hash or URL first.'); return; }
+
+  const btn = document.getElementById('fetch-btn');
+  const st  = document.getElementById('fetch-status');
+  btn.disabled = true;
+  st.innerHTML = '<span class="spin"></span>Detecting…';
+  document.getElementById('parse-result').classList.remove('visible');
+  document.getElementById('parse-alert').innerHTML = '';
+
+  try {
+    const chain = detectChain(raw) || S.chain;
+    if (!chain) { toast('Select a chain manually — could not auto-detect.'); btn.disabled=false; st.textContent=''; return; }
+
+    const hash = extractHash(raw);
+    if (!hash) throw new Error('Could not extract a transaction hash from your input.');
+
+    st.innerHTML = `<span class="spin"></span>Fetching from ${CHAINS[chain].name}…`;
+
+    let p;
+    if (chain === 'solana') {
+      const d = await fetchSolana(hash);
+      p = parseSolana(d);
+    } else {
+      const d = await fetchEvm(chain, hash);
+      p = parseEvm(d);
+    }
+    p.chain = chain;
+    p.txHash = hash;
+
+    st.innerHTML = '<span class="spin"></span>Getting prices…';
+    p.nativeUsd = await nativePrice(chain);
+
+    S.parsed = p;
+    showParsed(p);
+    document.getElementById('parse-result').classList.add('visible');
+    st.innerHTML = '✓ Done';
+
+  } catch(e) {
+    st.textContent = '';
+    document.getElementById('parse-alert').innerHTML = `<div class="alert alert-error">${e.message}</div>`;
+    document.getElementById('parse-result').classList.add('visible');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showParsed(p) {
+  document.getElementById('parse-alert').innerHTML =
+    p.note ? `<div class="alert alert-info">${p.note}</div>` : '';
+
+  const feeCcy  = p.feeCcy || p.ccy;
+  const stable  = isStable(p.ccy);
+  // For stablecoins, 1 unit = $1. For SOL/ETH, use nativeUsd.
+  const costUsd = stable ? 1 : (p.nativeUsd || 0);
+  // Fee is always in native token (SOL/ETH)
+  const feeUsd  = p.nativeUsd || 0;
+
+  document.getElementById('r-asset').textContent     = `${p.name} (${p.symbol})`;
+  document.getElementById('r-asset-sub').textContent = p.contract ? p.contract.slice(0,18)+'…' : p.chain;
+  document.getElementById('r-amount').textContent    = fmtAmt(p.amount, p.type);
+  document.getElementById('r-amount-sub').textContent = p.type.toUpperCase() + (p.tokenId ? ` #${p.tokenId}` : '');
+  document.getElementById('r-no-fee').textContent    = `${fmt(p.noFee,4)} ${p.ccy}`;
+  document.getElementById('r-no-fee-usd').textContent = costUsd ? `≈ $${fmt(p.noFee*costUsd,2)}` : '';
+  document.getElementById('r-with-fee').textContent  = `${fmt(p.withFee,4)} ${p.ccy}`;
+  document.getElementById('r-with-fee-usd').textContent = costUsd ? `≈ $${fmt(p.withFee*costUsd,2)}` : '';
+  document.getElementById('r-gas').textContent       = `${fmt(p.fee,6)} ${feeCcy}`;
+  document.getElementById('r-gas-usd').textContent   = feeUsd ? `≈ $${fmt(p.fee*feeUsd,2)}` : '';
+  document.getElementById('r-date').textContent      = fmtDate(p.date);
+  document.getElementById('r-type').textContent      = p.type === 'nft' ? 'NFT' : 'Token / Coin';
+
+  document.getElementById('e-name').value     = p.name !== 'Unknown' ? p.name : '';
+  document.getElementById('e-symbol').value   = p.symbol !== '?' ? p.symbol : '';
+  document.getElementById('e-contract').value = p.contract || '';
+  document.getElementById('e-amount').value   = p.amount;
+  document.getElementById('e-cost').value     = p.noFee;
+  document.getElementById('e-type').value     = p.type;
+}
+
+// ─── ADD TRADE ─────────────────────────────────────────────
+function addTrade() {
+  if (!S.parsed) { toast('Fetch a transaction first.'); return; }
+  const p = S.parsed;
+  const name     = document.getElementById('e-name').value.trim()     || p.name;
+  const symbol   = document.getElementById('e-symbol').value.trim()   || p.symbol;
+  const contract = document.getElementById('e-contract').value.trim() || p.contract;
+  const amount   = parseFloat(document.getElementById('e-amount').value) || p.amount;
+  const noFee    = parseFloat(document.getElementById('e-cost').value)   || p.noFee;
+  const type     = document.getElementById('e-type').value;
+  const notes    = document.getElementById('trade-notes').value.trim();
+
+  // Stablecoin costs are already in USD (1:1), so nativeUsd = 1
+  const entryNativeUsd = isStable(p.ccy) ? 1 : (p.nativeUsd || 0);
+  S.trades.push({
+    id: Date.now()+'', txHash:p.txHash, chain:p.chain, type, date:p.date, notes,
+    asset:  { name, symbol, contract, tokenId:p.tokenId||null, amount },
+    entry:  { noFee, fee:p.fee, withFee:noFee+(isStable(p.ccy)?0:p.fee), ccy:p.ccy, feeCcy:p.feeCcy||p.ccy, nativeUsd:entryNativeUsd },
+    priceLive: null
+  });
+  persist();
+
+  // Reset
+  S.parsed = null;
+  document.getElementById('tx-input').value = '';
+  document.getElementById('parse-result').classList.remove('visible');
+  document.getElementById('trade-notes').value = '';
+  document.getElementById('fetch-status').textContent = '';
+  document.querySelectorAll('.chain-opt').forEach(o => o.classList.remove('selected'));
+  S.chain = null;
+
+  toast(`${name} added ✓`);
+  goPortfolio();
+}
+
+function addManual() {
+  const name = document.getElementById('m-name').value.trim();
+  if (!name) { toast('Enter an asset name.'); return; }
+  const chain   = document.getElementById('m-chain').value;
+  const noFee   = parseFloat(document.getElementById('m-cost').value)  || 0;
+  const fee     = parseFloat(document.getElementById('m-fees').value)  || 0;
+  const nUsd    = parseFloat(document.getElementById('m-native-usd').value) || 0;
+  const dateVal = document.getElementById('m-date').value;
+
+  S.trades.push({
+    id: Date.now()+'', txHash:null, chain, notes: document.getElementById('m-notes').value.trim(),
+    type:   document.getElementById('m-type').value,
+    date:   dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
+    asset:  {
+      name, symbol: document.getElementById('m-symbol').value.trim(),
+      contract: document.getElementById('m-contract').value.trim(),
+      tokenId: null,
+      amount: parseFloat(document.getElementById('m-amount').value) || 1
+    },
+    entry:  { noFee, fee, withFee:noFee+fee, ccy:CHAINS[chain].ccy, feeCcy:CHAINS[chain].ccy, nativeUsd:nUsd },
+    priceLive: null
+  });
+  persist();
+  toast(`${name} added ✓`);
+  goPortfolio();
+}
+
+// ─── PORTFOLIO ─────────────────────────────────────────────
+function setFilter(f, btn) {
+  S.filter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderPortfolio();
+}
+
+function filtered() {
+  const f = S.filter;
+  if (f === 'all') return S.trades;
+  if (f === 'coin' || f === 'nft') return S.trades.filter(t => t.type === f);
+  return S.trades.filter(t => t.chain === f);
+}
+
+function renderPortfolio() {
+  const trades = filtered();
+  const body  = document.getElementById('trades-body');
+  const table = document.getElementById('trades-table');
+  const empty = document.getElementById('empty-state');
+
+  if (!S.trades.length) {
+    table.style.display = 'none'; empty.style.display = 'block';
+    renderStats([]);
+    return;
+  }
+  table.style.display = ''; empty.style.display = 'none';
+
+  // Group open buys (and their partial-sell records) by asset; legacy fully-closed
+  // trades from the old flow stay as individual rows at the bottom.
+  _groups = groupOpenAndSells(trades);
+  const legacyClosed = trades.filter(t => t.status === 'closed' && t.kind !== 'sell');
+
+  let html = '';
+  _groups.forEach((g, i) => {
+    const plain = g.buys.length === 1 && g.sells.length === 0;
+    html += plain ? rowHtml(g.buys[0]) : positionHtml(i);
+  });
+  for (const t of legacyClosed) html += rowHtml(t);
+
+  body.innerHTML = html;
+  renderStats(S.trades);
+}
+
+// Small grey USD suffix, matching the Entry (w/Fees) format.
+function usdSub(usd) {
+  return usd != null ? ` <span style="color:var(--muted);font-size:11px;">$${fmt(usd,2)}</span>` : '';
+}
+
+function currentValueCell(t) {
+  if (t.status === 'closed') {
+    if (t.type === 'nft') {
+      const xe = exitEth(t), xu = t.exit?.proceedsUsd ?? null;
+      if (xe !== null) return `<span style="color:var(--muted);">${fmt(xe,4)} ETH${usdSub(xu)}</span>`;
+      return xu !== null ? `<span style="color:var(--muted);">$${fmt(xu,2)}</span>` : '<span class="neutral">—</span>';
+    }
+    const v = t.exit?.proceedsUsd ?? null;
+    return v !== null ? `<span style="color:var(--muted);">$${fmt(v,2)}</span>` : '<span class="neutral">—</span>';
+  }
+  if (t.priceLive === null) return '<span class="neutral">—</span>';
+  if (t.type === 'nft') return `${fmt(liveValueEth(t),4)} ETH${usdSub(liveValueUsd(t)||null)}`;
+  return `$${fmt(liveValueUsd(t), 2)}`;
+}
+
+// P&L cell — ETH primary + USD grey for NFTs (open & sold); USD for coins.
+function pnlCell(t) {
+  if (t.type === 'nft') {
+    let ethPnl = null, usdPnl = null;
+    if (t.status === 'closed') {
+      const xe = exitEth(t);
+      if (xe !== null) ethPnl = xe - entryEth(t);
+      const inv = entryUsd(t);
+      if (inv && t.exit?.proceedsUsd != null) usdPnl = t.exit.proceedsUsd - inv;
+    } else if (t.priceLive !== null) {
+      ethPnl = liveValueEth(t) - entryEth(t);
+      usdPnl = calcPnl(t);                              // null if purchase USD unknown
+    }
+    if (ethPnl === null && usdPnl === null) return '<span class="neutral">—</span>';
+    if (ethPnl !== null) {
+      const es = ethPnl>=0?'+':'-', ecls = ethPnl>=0?'positive':'negative';
+      const sec = usdPnl!=null ? ` <span style="color:var(--muted);font-size:11px;">${usdPnl>=0?'+':'-'}$${fmt(Math.abs(usdPnl),2)}</span>` : '';
+      return `<span class="${ecls}">${es}${fmt(Math.abs(ethPnl),4)} ETH</span>${sec}`;
+    }
+    const us = usdPnl>=0?'+':'-', ucls = usdPnl>=0?'positive':'negative';
+    return `<span class="${ucls}">${us}$${fmt(Math.abs(usdPnl),2)}</span>`;
+  }
+  // coins → USD
+  const pnl = calcPnl(t), pct = calcPct(t);
+  if (pnl === null) return '<span class="neutral">—</span>';
+  const cls = pnl>=0?'positive':'negative', sign = pnl>=0?'+':'-';
+  const pctStr = pct!==null ? ` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>` : '';
+  return `<span class="${cls}">${sign}$${fmt(Math.abs(pnl),2)}</span>${pctStr}`;
+}
+
+// Entry columns: coins show price PER COIN (USD) with native + total as grey subs;
+// NFTs show the native cost per NFT with USD sub (one NFT = one unit).
+function entryTds(t) {
+  if (t.type === 'nft') {
+    const usd = entryUsd(t);
+    return `<td style="color:var(--muted);font-size:12px;">${fmt(t.entry.noFee,5)} ${t.entry.ccy}</td>`
+      + `<td style="font-size:12px;">${fmt(t.entry.withFee,5)} ${t.entry.ccy}${usd?` <span style="color:var(--muted);font-size:11px;">$${fmt(usd,2)}</span>`:''}</td>`;
+  }
+  const amt = t.asset.amount || 0;
+  const nu  = t.entry.nativeUsd || 0;
+  const totalWithUsd = entryUsd(t);          // withFee * nativeUsd
+  if (nu && amt) {
+    const puNo   = (t.entry.noFee * nu) / amt;
+    const puWith = totalWithUsd / amt;
+    const dn = puNo<0.001?8:4, dw = puWith<0.001?8:4;
+    return `<td style="color:var(--muted);font-size:12px;">$${fmt(puNo,dn)}<span style="display:block;font-size:10px;">${fmt(t.entry.noFee,5)} ${t.entry.ccy}</span></td>`
+      + `<td style="font-size:12px;">$${fmt(puWith,dw)} <span style="color:var(--muted);font-size:11px;">/coin</span><span style="display:block;color:var(--muted);font-size:11px;">$${fmt(totalWithUsd,2)} total</span></td>`;
+  }
+  // USD-at-purchase unknown → fall back to native totals
+  return `<td style="color:var(--muted);font-size:12px;">${fmt(t.entry.noFee,5)} ${t.entry.ccy}</td>`
+    + `<td style="font-size:12px;">${fmt(t.entry.withFee,5)} ${t.entry.ccy}</td>`;
+}
+
+function rowHtml(t, isLot=false) {
+  const ch = CHAINS[t.chain] || { name:t.chain, color:'#888' };
+  const closed = t.status === 'closed';
+  const txLink = t.txHash ? `<a onclick="openTx('${t.id}')" style="cursor:pointer">tx ↗</a>` : 'manual';
+
+  // Price cell: closed shows sale price, open shows live or click-to-edit
+  let priceCell;
+  if (closed) {
+    const saleUsd = t.exit?.proceedsUsd ?? null;
+    const xe = exitEth(t);
+    priceCell = (t.type==='nft' && xe !== null)
+      ? `<span style="color:var(--muted);font-size:12px;">sold ${fmt(xe,4)} ETH${saleUsd!=null?` <span style="font-size:11px;">$${fmt(saleUsd,2)}</span>`:''}</span>`
+      : saleUsd !== null
+        ? `<span style="color:var(--muted);font-size:12px;">sold $${fmt(saleUsd,2)}</span>`
+        : '<span class="neutral">—</span>';
+  } else if (t.priceLive !== null) {
+    const disp = t.type==='nft'
+      ? `${fmt(t.priceLive,4)} ETH${S.ethUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(t.priceLive*S.ethUsd,2)}</span>`:''}`
+      : `$${fmt(t.priceLive, t.priceLive < 0.001 ? 8 : 4)}`;
+    priceCell = `<span class="price-cell" onclick="editPrice('${t.id}')" title="Click to edit price">${disp}</span>`
+      + ` <button onclick="clearPrice('${t.id}')" title="Clear price" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px;line-height:1;vertical-align:middle;">×</button>`;
+  } else {
+    priceCell = `<span class="price-cell" onclick="editPrice('${t.id}')" title="Click to set price" style="color:var(--muted);font-size:11px;">click to set</span>`;
+  }
+
+  // Action buttons
+  const actions = closed
+    ? `<button class="action-btn del" title="Delete" onclick="delTrade('${t.id}')">×</button>`
+    : `<button class="action-btn" title="Sell / close position" onclick="openSellModal('${t.id}')">Sell</button>
+       <button class="action-btn" title="Refresh price" onclick="refreshOne('${t.id}')">↻</button>
+       <button class="action-btn del" title="Delete" onclick="delTrade('${t.id}')">×</button>`;
+
+  return `<tr class="${closed?'row-closed':''}${isLot?' lot-row':''}">
+    <td>
+      <div class="asset-cell">
+        <div class="asset-icon" style="color:${ch.color}">${(t.asset.symbol||'?').slice(0,3).toUpperCase()}</div>
+        <div>
+          <div class="asset-name">${isLot?'<span class="lot-prefix">↳</span>':''}${esc(t.asset.name)}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
+          <div class="asset-sub">${fmtDate(t.date)} · ${txLink}</div>
+        </div>
+      </div>
+    </td>
+    <td>
+      <span class="chain-badge chain-${t.chain}">${ch.name}</span>
+      <span class="type-badge type-${t.type}">${t.type.toUpperCase()}</span>
+    </td>
+    <td style="color:var(--muted);font-size:12px;">${fmtAmt(t.asset.amount,t.type)}</td>
+    ${entryTds(t)}
+    <td>${priceCell}</td>
+    <td style="font-size:13px;">${currentValueCell(t)}</td>
+    <td>${pnlCell(t)}</td>
+    <td><div class="trade-actions">${actions}</div></td>
+  </tr>`;
+}
+
+// Summary row for an asset bought across several transactions: blended average
+// cost + combined value/P&L, with a caret to expand the individual buys below.
+function positionHtml(i) {
+  const g = _groups[i];
+  const m = positionMetrics(g);
+  const t0 = m.t0, count = m.count, isNft = m.isNft;
+  const ch = CHAINS[t0.chain] || { name:t0.chain, color:'#888' };
+  const expanded = expandedGroups.has(g.key);
+  const caret = expanded ? '▾' : '▸';
+  const partial = m.soldQty > 0;
+
+  // ── Amount (remaining), with "sold X of Y" when partially exited ──
+  const amtCell = (isNft ? `${fmt(m.remainingQty,0)} NFTs` : fmtAmt(m.remainingQty,'coin'))
+    + (partial ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmtAmt(m.soldQty,isNft?'nft':'coin')} of ${fmtAmt(m.totalBought,isNft?'nft':'coin')}</span>` : '');
+
+  // ── Average entry cells ──
+  let entryNoFeeTd, entryWithFeeTd;
+  const basisLabel = partial ? `$${fmt(m.remainingCostUsd,2)} left` : `$${fmt(m.remainingCostUsd,2)} total`;
+  if (isNft) {
+    const avgNo = m.totNoFee/m.totalBought, avgWith = m.totWith/m.totalBought, avgUsd = m.avgCostUsd;
+    entryNoFeeTd = `<td style="color:var(--muted);font-size:12px;">${fmt(avgNo,5)} ${m.ccy}</td>`;
+    entryWithFeeTd = `<td style="font-size:12px;">${fmt(avgWith,5)} ${m.ccy}${avgUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(avgUsd,2)}</span>`:''}<span style="display:block;color:var(--muted);font-size:11px;">avg/NFT · ${basisLabel}</span></td>`;
+  } else if (m.totalInvUsd && m.totalBought) {
+    const puWith = m.avgCostUsd;
+    const puNo   = g.buys.reduce((s,b)=>s+(b.entry.noFee*(b.entry.nativeUsd||0)),0)/m.totalBought;
+    const dw = puWith<0.001?8:4, dn = puNo<0.001?8:4;
+    entryNoFeeTd = `<td style="color:var(--muted);font-size:12px;">$${fmt(puNo,dn)}</td>`;
+    entryWithFeeTd = `<td style="font-size:12px;">$${fmt(puWith,dw)} <span style="color:var(--muted);font-size:11px;">avg/coin</span><span style="display:block;color:var(--muted);font-size:11px;">${basisLabel}</span></td>`;
+  } else {
+    entryNoFeeTd = `<td style="color:var(--muted);font-size:12px;">${fmt(m.totNoFee,5)} ${m.ccy}</td>`;
+    entryWithFeeTd = `<td style="font-size:12px;">${fmt(m.totWith,5)} ${m.ccy} <span style="color:var(--muted);font-size:11px;">total</span></td>`;
+  }
+
+  // ── Current price (shared across buys) ──
+  let priceCell;
+  if (m.livePrice !== null) {
+    const disp = isNft
+      ? `${fmt(m.livePrice,4)} ETH${S.ethUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(m.livePrice*S.ethUsd,2)}</span>`:''}`
+      : `$${fmt(m.livePrice, m.livePrice<0.001?8:4)}`;
+    priceCell = `<span class="price-cell" onclick="editPrice('${t0.id}')" title="Click to edit — applies to all buys">${disp}</span>`
+      + ` <button onclick="clearPrice('${t0.id}')" title="Clear price" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px;line-height:1;vertical-align:middle;">×</button>`;
+  } else {
+    priceCell = `<span class="price-cell" onclick="editPrice('${t0.id}')" title="Click to set price" style="color:var(--muted);font-size:11px;">click to set</span>`;
+  }
+
+  // ── Current value (remaining) + P&L (unrealized main, realized sub) ──
+  const realizedSub = partial
+    ? `<span style="display:block;font-size:11px;color:var(--muted);">${m.realizedUsd>=0?'+':'-'}$${fmt(Math.abs(m.realizedUsd),2)} realized</span>` : '';
+  let valueCell, pnlHtml;
+  if (m.remainingQty <= 0) {
+    valueCell = '<span class="neutral">closed</span>';
+    pnlHtml = `<span class="${m.realizedUsd>=0?'positive':'negative'}">${m.realizedUsd>=0?'+':'-'}$${fmt(Math.abs(m.realizedUsd),2)}</span> <span style="font-size:11px;color:var(--muted);">realized</span>`;
+  } else if (m.livePrice === null) {
+    valueCell = '<span class="neutral">—</span>';
+    pnlHtml = partial ? `<span class="neutral">—</span>${realizedSub}` : '<span class="neutral">—</span>';
+  } else if (isNft) {
+    const valUsd = m.openValueUsd;
+    valueCell = `${fmt(m.openValueEth,4)} ETH${valUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(valUsd,2)}</span>`:''}`;
+    const avgWithEth = m.totWith/m.totalBought;
+    const ethPnl = m.openValueEth - avgWithEth*m.remainingQty;
+    const es = ethPnl>=0?'+':'-', ecls = ethPnl>=0?'positive':'negative';
+    const usdSubTxt = m.unrealizedUsd!=null?` <span style="color:var(--muted);font-size:11px;">${m.unrealizedUsd>=0?'+':'-'}$${fmt(Math.abs(m.unrealizedUsd),2)}</span>`:'';
+    pnlHtml = `<span class="${ecls}">${es}${fmt(Math.abs(ethPnl),4)} ETH</span>${usdSubTxt}${realizedSub}`;
+  } else {
+    valueCell = `$${fmt(m.openValueUsd,2)}`;
+    const pnl = m.unrealizedUsd, pct = m.remainingCostUsd ? pnl/m.remainingCostUsd*100 : null;
+    const cls = pnl>=0?'positive':'negative', sign = pnl>=0?'+':'-';
+    const pctStr = pct!=null?` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>`:'';
+    pnlHtml = `<span class="${cls}">${sign}$${fmt(Math.abs(pnl),2)}</span>${pctStr}${realizedSub}`;
+  }
+
+  const subText = partial
+    ? `${count} buys · ${m.soldQty>0?'partially sold':''} · ${expanded?'hide':'show'} buys & sells`
+    : `blended average · ${expanded?'hide':'show'} the ${count} individual buys`;
+
+  const summary = `<tr class="pos-row">
+    <td>
+      <div class="asset-cell pos-toggle" onclick="toggleGroup(${i})" title="${expanded?'Hide':'Show'} buys${partial?' & sells':''}">
+        <span class="pos-caret">${caret}</span>
+        <div class="asset-icon" style="color:${ch.color}">${(t0.asset.symbol||'?').slice(0,3).toUpperCase()}</div>
+        <div>
+          <div class="asset-name">${esc(t0.asset.name)}<span class="pos-badge">${count} BUY${count>1?'S':''}</span>${partial?'<span class="sold-badge">PART. SOLD</span>':''}</div>
+          <div class="asset-sub">${subText}</div>
+        </div>
+      </div>
+    </td>
+    <td>
+      <span class="chain-badge chain-${t0.chain}">${ch.name}</span>
+      <span class="type-badge type-${t0.type}">${t0.type.toUpperCase()}</span>
+    </td>
+    <td style="font-size:12px;">${amtCell}</td>
+    ${entryNoFeeTd}
+    ${entryWithFeeTd}
+    <td>${priceCell}</td>
+    <td style="font-size:13px;">${valueCell}</td>
+    <td>${pnlHtml}</td>
+    <td><div class="trade-actions">
+      ${m.remainingQty>0?`<button class="action-btn" title="Sell some or all of this position" onclick="openSellModal('${t0.id}')">Sell</button>`:''}
+      <button class="action-btn" title="Refresh price for all buys" onclick="refreshGroup(${i})">↻</button>
+    </div></td>
+  </tr>`;
+
+  let detail = '';
+  if (expanded) {
+    detail = g.buys.map(b => rowHtml(b, true)).join('')
+           + g.sells.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(s => sellRowHtml(s, m)).join('');
+  }
+  return summary + detail;
+}
+
+// A single sale line shown under an expanded position.
+function sellRowHtml(s, m) {
+  const ch = CHAINS[s.chain] || { name:s.chain, color:'#888' };
+  const q = s.sell.qty, pUsd = s.sell.proceedsUsd || 0;
+  const basis = m.avgCostUsd * q;
+  const realized = pUsd - basis;
+  const pricePer = q ? pUsd/q : 0;
+  const cls = realized>=0?'positive':'negative', sign = realized>=0?'+':'-';
+  const pct = basis ? realized/basis*100 : null;
+  const txLink = s.txHash ? `<a onclick="openSellTx('${s.id}')" style="cursor:pointer">tx ↗</a>` : 'manual';
+  return `<tr class="lot-row sell-row">
+    <td>
+      <div class="asset-cell">
+        <div class="asset-icon" style="color:var(--red)">SLD</div>
+        <div>
+          <div class="asset-name"><span class="lot-prefix" style="color:var(--red)">↳</span>Sold ${fmtAmt(q, s.type==='nft'?'nft':'coin')}</div>
+          <div class="asset-sub">${fmtDate(s.date)} · ${txLink}</div>
+        </div>
+      </div>
+    </td>
+    <td><span class="sold-badge">SELL</span></td>
+    <td style="color:var(--muted);font-size:12px;">${fmtAmt(q, s.type==='nft'?'nft':'coin')}</td>
+    <td style="color:var(--muted);font-size:12px;">—</td>
+    <td style="color:var(--muted);font-size:12px;">$${fmt(basis,2)} <span style="font-size:10px;">cost</span></td>
+    <td style="color:var(--muted);font-size:12px;">$${fmt(pricePer, pricePer<0.001?8:4)}</td>
+    <td style="font-size:13px;color:var(--muted);">$${fmt(pUsd,2)}</td>
+    <td><span class="${cls}">${sign}$${fmt(Math.abs(realized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>`:''}</td>
+    <td><div class="trade-actions"><button class="action-btn del" title="Undo this sale" onclick="delTrade('${s.id}')">×</button></div></td>
+  </tr>`;
+}
+
+// Refresh the live price for every buy in a position at once.
+async function refreshGroup(i) {
+  const g = _groups[i]; if (!g) return;
+  const lots = g.buys, t0 = lots[0];
+  _rateLimited = false;
+  if (t0.type === 'nft') {
+    if (!S.keys.opensea) { toast('Add your OpenSea API key in Settings to auto-fetch NFT floors.'); return; }
+    toast('Fetching floor price…');
+    try {
+      await refreshEthRate();
+      const floor = await openseaFloor(t0);
+      if (floor != null) { lots.forEach(l => l.priceLive = floor); persist(); renderPortfolio(); toast(`${t0.asset.name} floor updated ✓`); }
+      else toast(_rateLimited ? 'Rate limited — wait ~30s and try again.' : 'Floor not found on OpenSea — set it manually.');
+    } catch(e) { toast(e.message); }
+    return;
+  }
+  const np = await nativePrice(t0.chain);
+  const p  = await tokenPrice(t0.chain, t0.asset.contract);
+  if (p !== null) {
+    lots.forEach(l => { l.priceLive = p; if (!l.entry.nativeUsd) l.entry.nativeUsd = np; });
+    persist(); renderPortfolio(); toast(`${t0.asset.name} price updated ✓`);
+  } else {
+    toast(_rateLimited ? 'Rate limited — wait ~30s and refresh again.' : 'Price not found — token may be too new or not listed.');
+  }
+}
+
+// ── Units: NFT priceLive & entry.withFee are in ETH; coin priceLive is USD/token ──
+function entryUsd(t) {
+  // nativeUsd = 1 for stablecoins, native-token price at purchase otherwise
+  return t.entry.withFee * (t.entry.nativeUsd || 0);
+}
+function entryEth(t) { return t.entry.withFee; }          // meaningful for NFTs (ETH-priced)
+
+function liveValueUsd(t) {
+  if (t.priceLive === null) return null;
+  if (t.type === 'nft') return t.priceLive * (S.ethUsd || 0);  // priceLive in ETH → USD
+  return t.priceLive * t.asset.amount;                          // coin priceLive already USD
+}
+function liveValueEth(t) {
+  if (t.type !== 'nft' || t.priceLive === null) return null;
+  return t.priceLive;                                           // floor in ETH per NFT
+}
+function exitEth(t) {                                           // ETH proceeds of a sold NFT
+  if (t.type !== 'nft' || !t.exit) return null;
+  return /^W?ETH$/i.test(t.exit.ccy || '') ? t.exit.proceeds : null;
+}
+
+function calcPnl(t) {                                           // always USD
+  const invested = entryUsd(t);
+  if (!invested) return null;
+  if (t.status === 'closed') {
+    const proceeds = t.exit?.proceedsUsd ?? null;
+    return proceeds !== null ? proceeds - invested : null;
+  }
+  const v = liveValueUsd(t);
+  return v === null ? null : v - invested;
+}
+function calcPnlEth(t) {                                        // ETH, NFTs only (open positions)
+  if (t.type !== 'nft' || t.status === 'closed' || t.priceLive === null) return null;
+  return liveValueEth(t) - entryEth(t);
+}
+function calcPct(t) {
+  const invested = entryUsd(t);
+  if (!invested) return null;
+  const pnl = calcPnl(t);
+  if (pnl === null) return null;
+  return (pnl / invested) * 100;
+}
+
+function renderStats(trades) {
+  let invested=0, openValue=0, realizedPnl=0, openCount=0, closedCount=0;
+  const cat = { nft:{inv:0,val:0}, coin:{inv:0,val:0} };
+
+  // Positions (open buys + partial sells), valued at average cost
+  for (const g of groupOpenAndSells(trades)) {
+    const m = positionMetrics(g);
+    realizedPnl += m.realizedUsd;
+    if (m.remainingQty > 0) {
+      openCount++;
+      const val = m.openValueUsd != null ? m.openValueUsd : m.remainingCostUsd;
+      invested  += m.remainingCostUsd;
+      openValue += val;
+      const c = cat[m.t0.type] || (cat[m.t0.type] = {inv:0,val:0});
+      c.inv += m.remainingCostUsd; c.val += val;
+    } else {
+      closedCount++;          // fully sold out
+    }
+  }
+  // Legacy fully-closed trades from the old sell flow
+  for (const t of trades) {
+    if (t.status === 'closed' && t.kind !== 'sell') {
+      closedCount++;
+      const usd = entryUsd(t);
+      const proceeds = t.exit?.proceedsUsd ?? usd;
+      realizedPnl += proceeds - usd;
+    }
+  }
+  const unrealizedPnl = openValue - invested;
+
+  document.getElementById('s-invested').textContent  = '$'+fmt(invested,2);
+  document.getElementById('s-value').textContent     = '$'+fmt(openValue,2);
+  document.getElementById('s-pnl').textContent       = (unrealizedPnl>=0?'+':'-')+'$'+fmt(Math.abs(unrealizedPnl),2);
+  document.getElementById('s-pnl').className         = 'stat-value '+(unrealizedPnl>=0?'positive':'negative');
+  document.getElementById('s-realized').textContent  = (realizedPnl>=0?'+':'-')+'$'+fmt(Math.abs(realizedPnl),2);
+  document.getElementById('s-realized').className    = 'stat-value '+(realizedPnl>=0?'positive':'negative');
+  document.getElementById('s-realized-sub').textContent = `${closedCount} sold`;
+  document.getElementById('s-count').textContent     = openCount + closedCount;
+  document.getElementById('s-count-sub').textContent = `${openCount} open · ${closedCount} closed`;
+
+  // Compact NFT vs Token breakdown (open positions, current value + P&L)
+  const bd = document.getElementById('s-breakdown');
+  if (!openCount) { bd.innerHTML = ''; }
+  else {
+    const seg = (label, c) => {
+      const pnl = c.val - c.inv, sign = pnl>=0?'+':'-', cls = pnl>=0?'positive':'negative';
+      return `<strong style="color:var(--text);font-weight:600;">${label}</strong> $${fmt(c.val,2)} `
+           + `<span class="${cls}">(${sign}$${fmt(Math.abs(pnl),2)})</span>`;
+    };
+    bd.innerHTML = `${seg('NFTs',cat.nft)} &nbsp;·&nbsp; ${seg('Tokens',cat.coin)}`;
+  }
+}
+
+// ─── PRICE REFRESH ─────────────────────────────────────────
+// Tracks whether a price service replied "429 Too Many Requests" during the
+// current refresh, so we can show a clear "rate limited" message.
+let _rateLimited = false;
+async function apiGet(url, opts) {
+  const r = await fetch(url, opts);
+  if (r.status === 429) _rateLimited = true;
+  return r;
+}
+
+async function nativePrice(chain) {
+  try {
+    const id = NATIVE_CG[chain];
+    const r  = await apiGet(`${CG}/simple/price?ids=${id}&vs_currencies=usd`);
+    const d  = await r.json();
+    return d[id]?.usd || 0;
+  } catch { return 0; }
+}
+
+// Live ETH/USD rate, used to convert NFT prices (entered in ETH) into USD.
+async function refreshEthRate() {
+  const p = await nativePrice('ethereum');
+  if (p) { S.ethUsd = p; persist(); }
+  return S.ethUsd;
+}
+
+// ─── OPENSEA NFT FLOOR PRICE ───────────────────────────────
+const OS_CHAIN = { ethereum:'ethereum', base:'base', arbitrum:'arbitrum' };
+// Returns the live collection floor price in ETH, or null if unavailable.
+async function openseaFloor(t) {
+  const key = S.keys.opensea;
+  if (!key) throw new Error('Add your OpenSea API key in Settings to fetch NFT floor prices.');
+  const osc = OS_CHAIN[t.chain];
+  if (!osc || !t.asset.contract) return null;
+  const hdr = { headers: { 'X-API-KEY': key } };
+  let slug = t.asset.osSlug;
+  if (!slug) {                                              // resolve contract → collection slug (cached)
+    const r = await apiGet(`https://api.opensea.io/api/v2/chain/${osc}/contract/${t.asset.contract}`, hdr);
+    if (!r.ok) return null;
+    slug = (await r.json()).collection;
+    if (slug) t.asset.osSlug = slug;
+  }
+  if (!slug) return null;
+  const sr = await apiGet(`https://api.opensea.io/api/v2/collections/${slug}/stats`, hdr);
+  if (!sr.ok) return null;
+  const floor = (await sr.json())?.total?.floor_price;
+  return floor != null ? Number(floor) : null;
+}
+
+// Backfill the ETH/USD price at purchase for ETH-priced trades missing it
+// (e.g. CoinGecko was rate-limited when the trade was added). Needed for USD cost/P&L.
+async function backfillNativeUsd() {
+  let changed = false;
+  for (const t of S.trades) {
+    if (!t.entry || t.entry.nativeUsd) continue;
+    if (isStable(t.entry.ccy)) { t.entry.nativeUsd = 1; changed = true; continue; }
+    if (!/^W?ETH$/i.test(t.entry.ccy || '')) continue;       // only ETH-priced trades
+    const d = new Date(t.date);
+    if (isNaN(d)) continue;
+    const dd = String(d.getUTCDate()).padStart(2,'0');
+    const mm = String(d.getUTCMonth()+1).padStart(2,'0');
+    try {
+      const r = await apiGet(`${CG}/coins/ethereum/history?date=${dd}-${mm}-${d.getUTCFullYear()}&localization=false`);
+      const j = await r.json();
+      const p = j?.market_data?.current_price?.usd;
+      if (p) { t.entry.nativeUsd = p; changed = true; }
+    } catch {}
+  }
+  if (changed) persist();
+}
+
+async function tokenPrice(chain, contract) {
+  if (!contract || contract.length < 10) return null;
+
+  // DexScreener first — cross-chain, no key, CORS-friendly, covers far more tokens
+  try {
+    const dsChain = DS_CHAIN[chain];
+    const r = await apiGet(`https://api.dexscreener.com/latest/dex/tokens/${contract}`);
+    if (r.ok) {
+      const d = await r.json();
+      const pairs = (d.pairs || []).filter(p => p.chainId === dsChain && p.priceUsd);
+      if (pairs.length > 0) {
+        pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+        return parseFloat(pairs[0].priceUsd);
+      }
+    }
+  } catch { /* fall through */ }
+
+  // CoinGecko fallback
+  try {
+    const r = await apiGet(`${CG}/simple/token_price/${CHAINS[chain].cg}?contract_addresses=${contract}&vs_currencies=usd`);
+    const d = await r.json();
+    const k = Object.keys(d)[0];
+    return k ? (d[k]?.usd ?? null) : null;
+  } catch { return null; }
+}
+
+async function refreshPrices() {
+  _rateLimited = false;
+  toast('Refreshing prices…');
+  await refreshEthRate();                 // keeps NFT USD values current
+  const nPrices = {};
+  for (const t of S.trades) {
+    if (t.status === 'closed') continue;
+    if (t.type === 'nft') {                       // auto floor price (in ETH) via OpenSea
+      if (S.keys.opensea) { try { const f = await openseaFloor(t); if (f != null) t.priceLive = f; } catch {} }
+      continue;
+    }
+    if (!nPrices[t.chain]) nPrices[t.chain] = await nativePrice(t.chain);
+    const price = await tokenPrice(t.chain, t.asset.contract);
+    if (price !== null) {
+      t.priceLive = price;
+      if (!t.entry.nativeUsd) t.entry.nativeUsd = nPrices[t.chain];
+    }
+  }
+  persist();
+  renderPortfolio();
+  toast(_rateLimited
+    ? 'Some prices were rate limited — wait ~30s and refresh again.'
+    : 'Prices updated ✓');
+}
+
+async function refreshOne(id) {
+  const t = S.trades.find(x => x.id===id);
+  if (!t) return;
+  _rateLimited = false;
+  if (t.type === 'nft') {                          // live floor price (ETH) from OpenSea
+    if (!S.keys.opensea) { toast('Add your OpenSea API key in Settings to auto-fetch NFT floors.'); return; }
+    toast('Fetching floor price…');
+    try {
+      await refreshEthRate();
+      const floor = await openseaFloor(t);
+      if (floor != null) {
+        t.priceLive = floor; syncGroupPrice(t); persist(); renderPortfolio();
+        const usd = S.ethUsd ? ` (≈ $${fmt(floor*S.ethUsd,2)})` : '';
+        toast(`${t.asset.name} floor: ${fmt(floor,4)} ETH${usd} ✓`);
+      } else {
+        toast(_rateLimited
+          ? 'Price service rate limited — wait ~30s and try ↻ again.'
+          : 'Floor not found on OpenSea — set the price manually instead.');
+      }
+    } catch(e) { toast(e.message); }
+    return;
+  }
+  const np = await nativePrice(t.chain);
+  const p  = await tokenPrice(t.chain, t.asset.contract);
+  if (p !== null) {
+    t.priceLive = p;
+    if (!t.entry.nativeUsd) t.entry.nativeUsd = np;
+    syncGroupPrice(t);
+    persist(); renderPortfolio();
+    toast(`${t.asset.name} price updated ✓`);
+  } else {
+    toast(_rateLimited
+      ? 'Rate limited — wait ~30s and refresh again.'
+      : (t.chain === 'solana' && !S.keys.jupiter
+          ? 'Price not found. Add a Jupiter API key in Settings to cover more Solana tokens.'
+          : 'Price not found — token may be too new or not yet listed.'));
+  }
+}
+
+// ─── MANUAL PRICE EDIT ─────────────────────────────────────
+async function editPrice(id) {
+  const t = S.trades.find(x => x.id===id);
+  if (!t || t.status==='closed') return;
+  const isNft = t.type === 'nft';
+  const current = t.priceLive !== null ? t.priceLive : '';
+  const label = isNft
+    ? `Set current floor price for ${t.asset.name}.\nEnter ETH (e.g. 0.3) — or USD with a $ (e.g. $1200):`
+    : `Set current price for ${t.asset.name} (USD per token):`;
+  const raw = prompt(`${label}\n\nLeave blank and click OK to clear the price.`, current);
+  if (raw === null) return; // user hit Cancel
+  if (raw.trim() === '') { clearPrice(id); return; }
+
+  if (isNft) {
+    if (!S.ethUsd) await refreshEthRate();              // need live ETH rate for conversion
+    const usdMode = raw.trim().startsWith('$');
+    const num = parseFloat(raw.replace(/[$,\s]/g,''));
+    if (isNaN(num) || num < 0) { toast('Enter a valid number.'); return; }
+    if (usdMode) {
+      if (!S.ethUsd) { toast('Live ETH price unavailable — enter the price in ETH instead.'); return; }
+      t.priceLive = num / S.ethUsd;                      // USD → ETH (stored in ETH)
+    } else {
+      t.priceLive = num;                                 // ETH directly
+    }
+    // entry.nativeUsd already holds the ETH price at purchase — leave it.
+    syncGroupPrice(t);
+    persist(); renderPortfolio();
+    const usd = S.ethUsd ? ` (≈ $${fmt(t.priceLive*S.ethUsd,2)})` : '';
+    toast(`${t.asset.name} floor set to ${fmt(t.priceLive,4)} ETH${usd} ✓`);
+    return;
+  }
+
+  const price = parseFloat(raw);
+  if (isNaN(price) || price < 0) { toast('Enter a valid number.'); return; }
+  t.priceLive = price;
+  if (!t.entry.nativeUsd) t.entry.nativeUsd = 1;          // manual coin price is entered in USD
+  syncGroupPrice(t);
+  persist(); renderPortfolio();
+  toast(`${t.asset.name} price set to $${fmt(price, price<0.001?8:4)} ✓`);
+}
+
+function clearPrice(id) {
+  const t = S.trades.find(x => x.id===id);
+  if (!t) return;
+  t.priceLive = null;
+  syncGroupPrice(t);
+  persist(); renderPortfolio();
+}
+
+// ─── SELL MODAL ────────────────────────────────────────────
+let _sellKey = null;
+
+function openSellModal(buyId) {
+  const buy = S.trades.find(x => x.id===buyId);
+  if (!buy) return;
+  _sellKey = groupKey(buy);
+  const g = groupByKey(_sellKey);
+  if (!g.buys.length) return;
+  const m = positionMetrics(g);
+  const t0 = m.t0, isNft = m.isNft;
+
+  document.getElementById('sell-modal-title').textContent = `Sell: ${t0.asset.name}`;
+  const liveVal = m.livePrice === null ? '—'
+    : (isNft ? `${fmt(m.openValueEth,4)} ETH (≈ $${fmt(m.openValueUsd,2)})` : `$${fmt(m.openValueUsd,2)}`);
+  document.getElementById('sell-modal-summary').innerHTML =
+    `<strong>Holding:</strong> ${fmtAmt(m.remainingQty, isNft?'nft':'coin')}${m.soldQty>0?` (already sold ${fmtAmt(m.soldQty,isNft?'nft':'coin')})`:''}<br>` +
+    `<strong>Avg cost:</strong> $${fmt(m.avgCostUsd, m.avgCostUsd<0.001?8:4)} / ${isNft?'NFT':'coin'} · $${fmt(m.remainingCostUsd,2)} basis<br>` +
+    `<strong>Current value:</strong> ${liveVal}`;
+
+  // Quantity — defaults to the full remaining holding; enter less for a partial sale
+  const qtyEl = document.getElementById('sell-qty');
+  qtyEl.value = isNft ? String(Math.round(m.remainingQty)) : m.remainingQty;
+  qtyEl.max = m.remainingQty;
+  qtyEl.step = isNft ? '1' : '0.000001';
+  document.getElementById('sell-qty-label').textContent = `Quantity to Sell (max ${fmtAmt(m.remainingQty, isNft?'nft':'coin')})`;
+  document.getElementById('sell-qty-hint').textContent = 'Enter fewer to record a partial sale — your remaining holdings stay open at the same average cost.';
+
+  const payCcy = t0.entry.ccy;
+  const ccyEl = document.getElementById('sell-ccy');
+  const usdLike = ['USD','USDC','USDT','DAI'].includes(payCcy);
+  ccyEl.value = usdLike ? 'USD' : payCcy;
+  updateSellRateRow();
+
+  document.getElementById('sell-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('sell-proceeds').value = '';
+  document.getElementById('sell-tx-input').value = '';
+  document.getElementById('sell-notes').value = '';
+  document.getElementById('sell-parsed-result').style.display = 'none';
+  document.getElementById('sell-fetch-status').textContent = '';
+
+  document.getElementById('sell-modal').style.display = 'flex';
+}
+
+function updateSellRateRow() {
+  const ccy = document.getElementById('sell-ccy').value;
+  const row = document.getElementById('sell-rate-row');
+  const lbl = document.getElementById('sell-rate-label');
+  if (['USD','USDC','USDT','DAI'].includes(ccy)) {
+    row.style.display = 'none';
+  } else {
+    row.style.display = '';
+    lbl.textContent = `${ccy} Price at Sale (USD)`;
+  }
+}
+
+document.getElementById('sell-ccy').addEventListener('change', updateSellRateRow);
+
+function closeSellModal() {
+  document.getElementById('sell-modal').style.display = 'none';
+  document.getElementById('sell-parsed-result').style.display = 'none';
+  document.getElementById('sell-fetch-status').textContent = '';
+  document.getElementById('sell-tx-input').value = '';
+  _sellKey = null;
+}
+
+// ─── FETCH SELL TX ─────────────────────────────────────────
+async function fetchSellTx() {
+  const g = groupByKey(_sellKey);
+  if (!g.buys.length) return;
+  const m = positionMetrics(g);
+  const t = m.t0;
+  let detectedQty = 0;
+
+  const raw = document.getElementById('sell-tx-input').value.trim();
+  if (!raw) { toast('Paste a sell transaction hash or URL first.'); return; }
+
+  const hash = extractHash(raw);
+  if (!hash) { toast('Could not extract a transaction hash from your input.'); return; }
+
+  const btn = document.getElementById('sell-fetch-btn');
+  const st  = document.getElementById('sell-fetch-status');
+  btn.disabled = true;
+  st.innerHTML = '<span class="spin"></span>Fetching…';
+  document.getElementById('sell-parsed-result').style.display = 'none';
+
+  try {
+    let proceedsNoFee, proceedsWithFee, feeCost, feeCcy, ccy, sellDate, nativeUsd;
+
+    if (t.chain === 'solana') {
+      const d = await fetchSolana(hash);
+      const meta = d.tx.meta;
+      const accounts = d.tx.transaction.message.accountKeys || [];
+      const signerPub = typeof accounts[0]==='string' ? accounts[0] : accounts[0]?.pubkey;
+      const feeSOL = (meta.fee || 0) / 1e9;
+      feeCcy = 'SOL';
+
+      const preTok  = meta.preTokenBalances  || [];
+      const postTok = meta.postTokenBalances || [];
+      const signerPre  = preTok.filter(x => x.owner === signerPub);
+      const signerPost = postTok.filter(x => x.owner === signerPub);
+
+      // How many of THIS asset left the wallet (quantity sold)
+      if (t.asset.contract) {
+        const mp = signerPre.find(x=>x.mint===t.asset.contract);
+        const mq = signerPost.find(x=>x.mint===t.asset.contract);
+        const preA  = parseFloat(mp?.uiTokenAmount?.uiAmountString||'0');
+        const postA = parseFloat(mq?.uiTokenAmount?.uiAmountString||'0');
+        detectedQty = Math.max(0, preA - postA);
+      }
+
+      // What did signer receive?
+      const allMints = new Set([...signerPre.map(x=>x.mint), ...signerPost.map(x=>x.mint)]);
+      const received = [];
+      for (const mint of allMints) {
+        const pre  = signerPre.find(x=>x.mint===mint);
+        const post = signerPost.find(x=>x.mint===mint);
+        const preAmt  = parseFloat(pre?.uiTokenAmount?.uiAmountString  || '0');
+        const postAmt = parseFloat(post?.uiTokenAmount?.uiAmountString || '0');
+        if (postAmt > preAmt) {
+          const info = SOL_TOKENS[mint] || { symbol: mint.slice(0,6)+'…', name: mint.slice(0,8)+'…' };
+          received.push({ mint, amount: postAmt - preAmt, ...info });
+        }
+      }
+
+      const preSOL  = (meta.preBalances  || [])[0] || 0;
+      const postSOL = (meta.postBalances || [])[0] || 0;
+      const solReceived = (postSOL - preSOL) / 1e9; // positive = received SOL net
+
+      if (received.length > 0) {
+        const r = received[0];
+        proceedsNoFee   = r.amount;
+        proceedsWithFee = r.amount; // proceeds in stablecoin; fee is separately in SOL
+        ccy = r.symbol;
+      } else if (solReceived > 0) {
+        proceedsNoFee   = solReceived + feeSOL; // add back fee to get gross
+        proceedsWithFee = solReceived;           // net after fee
+        ccy = 'SOL';
+      } else {
+        throw new Error('Could not detect what was received in this transaction.');
+      }
+
+      feeCost  = feeSOL;
+      sellDate = d.tx.blockTime ? new Date(d.tx.blockTime*1000).toISOString().slice(0,10) : '';
+      nativeUsd = await nativePrice('solana');
+
+    } else {
+      // EVM
+      const evmData = await fetchEvm(t.chain, hash);
+      const { from, valueEth, gasEth, tokens, nfts, e1155, ts } = evmData;
+
+      // How many of THIS asset left the wallet (quantity sold)
+      if (t.asset.contract) {
+        const ca = t.asset.contract.toLowerCase();
+        if (t.type === 'nft') {
+          detectedQty = nfts.filter(n=>n.from.toLowerCase()===from.toLowerCase() && n.contractAddress.toLowerCase()===ca).length
+            + e1155.filter(n=>n.from.toLowerCase()===from.toLowerCase() && n.contractAddress.toLowerCase()===ca).reduce((s,n)=>s+parseInt(n.tokenValue||'1'),0);
+        } else {
+          for (const x of tokens.filter(x=>x.from.toLowerCase()===from.toLowerCase() && x.contractAddress.toLowerCase()===ca)) {
+            const dec = parseInt(x.tokenDecimal||'18'); detectedQty += parseInt(x.value)/10**dec;
+          }
+        }
+      }
+
+      feeCcy = CHAINS[t.chain].ccy;
+      feeCost = gasEth;
+      nativeUsd = await nativePrice(t.chain);
+      sellDate = ts ? new Date(ts*1000).toISOString().slice(0,10) : '';
+
+      // Tokens received by signer (e.g. USDC from selling token)
+      const gotTok = tokens.filter(x => x.to.toLowerCase() === from.toLowerCase());
+      if (gotTok.length > 0) {
+        const tk = gotTok[0];
+        const dec = parseInt(tk.tokenDecimal || '6');
+        proceedsNoFee   = parseInt(tk.value) / 10**dec;
+        proceedsWithFee = proceedsNoFee; // stablecoin; gas is in ETH separately
+        ccy = tk.tokenSymbol;
+      } else if (valueEth > 0) {
+        // ETH received (e.g. selling on some DEXes that return ETH directly)
+        proceedsNoFee   = valueEth;
+        proceedsWithFee = valueEth - gasEth;
+        ccy = CHAINS[t.chain].ccy;
+      } else {
+        throw new Error('Could not detect proceeds. The ETH/token received may come via internal txs — enter the amount manually.');
+      }
+    }
+
+    // Calculate P&L against the average cost of the quantity being sold
+    const qtyForCalc = detectedQty > 0 ? detectedQty : m.remainingQty;
+    const invested = m.avgCostUsd * qtyForCalc;
+    const stableProceeds = isStable(ccy);
+    const feeUsd  = feeCost * (nativeUsd || 0);
+    const proceedsUsdNoFee  = stableProceeds ? proceedsNoFee  : proceedsNoFee  * (nativeUsd || 0);
+    const proceedsUsdWithFee = stableProceeds
+      ? proceedsWithFee - (isStable(feeCcy) ? feeCost : feeUsd)
+      : proceedsWithFee * (nativeUsd || 0);
+
+    const pnlNoFee   = invested ? proceedsUsdNoFee   - invested : null;
+    const pnlWithFee = invested ? proceedsUsdWithFee - invested : null;
+
+    // Show breakdown
+    document.getElementById('sp-no-fee').textContent     = `${fmt(proceedsNoFee,4)} ${ccy}`;
+    document.getElementById('sp-no-fee-usd').textContent = stableProceeds ? `≈ $${fmt(proceedsUsdNoFee,2)}` : (nativeUsd ? `≈ $${fmt(proceedsUsdNoFee,2)}` : '');
+    document.getElementById('sp-with-fee').textContent   = `${fmt(isStable(ccy) ? proceedsNoFee : proceedsWithFee, 4)} ${ccy}`;
+    document.getElementById('sp-with-fee-usd').textContent = `≈ $${fmt(proceedsUsdWithFee,2)}`;
+    document.getElementById('sp-fee').textContent        = `${fmt(feeCost,6)} ${feeCcy}`;
+    document.getElementById('sp-fee-usd').textContent    = feeUsd ? `≈ $${fmt(feeUsd,2)}` : '';
+
+    if (pnlWithFee !== null) {
+      const pct = invested ? (pnlWithFee / invested * 100) : 0;
+      document.getElementById('sp-pnl').textContent    = `${pnlWithFee>=0?'+':'-'}$${fmt(Math.abs(pnlWithFee),2)}`;
+      document.getElementById('sp-pnl').className      = pnlWithFee>=0?'positive':'negative';
+      document.getElementById('sp-pnl-pct').textContent = `${pnlWithFee>=0?'+':'-'}${fmt(Math.abs(pct),2)}% on cost`;
+      if (pnlNoFee !== null) {
+        const pctNoFee = invested ? (pnlNoFee / invested * 100) : 0;
+        document.getElementById('sp-pnl-pct').textContent +=
+          ` (${pnlNoFee>=0?'+':'-'}${fmt(Math.abs(pctNoFee),1)}% excl. fees)`;
+      }
+    }
+
+    document.getElementById('sell-parsed-result').style.display = 'block';
+
+    // Auto-fill the form fields
+    if (detectedQty > 0) document.getElementById('sell-qty').value = t.type==='nft' ? Math.round(detectedQty) : detectedQty;
+    document.getElementById('sell-proceeds').value = fmt(proceedsNoFee, 6);
+    if (['USD','USDC','USDT','DAI','FRAX'].includes(ccy)) {
+      document.getElementById('sell-ccy').value = ccy === 'USD' ? 'USD' : ccy;
+    } else if (ccy === 'SOL') {
+      document.getElementById('sell-ccy').value = 'SOL';
+      document.getElementById('sell-rate').value = nativeUsd || '';
+    } else {
+      document.getElementById('sell-ccy').value = 'ETH';
+      document.getElementById('sell-rate').value = nativeUsd || '';
+    }
+    updateSellRateRow();
+    if (sellDate) document.getElementById('sell-date').value = sellDate;
+
+    st.textContent = '✓ Parsed';
+
+  } catch(e) {
+    st.textContent = '';
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function submitSell() {
+  const g = groupByKey(_sellKey);
+  if (!g.buys.length) return;
+  const m = positionMetrics(g);
+  const t0 = m.t0, isNft = m.isNft;
+
+  let qty = parseFloat(document.getElementById('sell-qty').value);
+  if (isNaN(qty) || qty <= 0) { toast('Enter how many to sell.'); return; }
+  if (qty > m.remainingQty + 1e-9) { toast(`You only hold ${fmtAmt(m.remainingQty, isNft?'nft':'coin')}.`); return; }
+  if (isNft) qty = Math.round(qty);
+
+  const proceeds = parseFloat(document.getElementById('sell-proceeds').value);
+  if (isNaN(proceeds) || proceeds < 0) { toast('Enter the amount you received.'); return; }
+
+  const ccy  = document.getElementById('sell-ccy').value;
+  const rate = parseFloat(document.getElementById('sell-rate').value) || 0;
+  const dateVal = document.getElementById('sell-date').value;
+
+  let proceedsUsd;
+  if (['USD','USDC','USDT','DAI'].includes(ccy)) {
+    proceedsUsd = proceeds;
+  } else {
+    let r = rate;
+    if (!r) { r = await nativePrice(t0.chain); if (!r) { toast(`Enter the ${ccy} price in USD to calculate proceeds.`); return; } }
+    proceedsUsd = proceeds * r;
+  }
+
+  S.trades.push({
+    id: Date.now()+'', kind:'sell',
+    chain: t0.chain, type: t0.type,
+    date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
+    txHash: document.getElementById('sell-tx-input').value.trim() || null,
+    notes:  document.getElementById('sell-notes').value.trim(),
+    asset: { name:t0.asset.name, symbol:t0.asset.symbol, contract:t0.asset.contract, tokenId:t0.asset.tokenId||null },
+    sell: { qty, proceeds, ccy, rate: rate || null, proceedsUsd }
+  });
+
+  expandedGroups.add(_sellKey);          // reveal the new sale line under the position
+  persist();
+  closeSellModal();
+  renderPortfolio();
+
+  const realized = proceedsUsd - m.avgCostUsd*qty;
+  toast(`Sold ${fmtAmt(qty, isNft?'nft':'coin')} ${t0.asset.name} — realized ${realized>=0?'+':'-'}$${fmt(Math.abs(realized),2)} ✓`);
+}
+
+// Open a recorded sale's transaction in the chain explorer.
+function openSellTx(id) {
+  const s = S.trades.find(x => x.id===id);
+  if (!s?.txHash) return;
+  const exp = { ethereum:'https://etherscan.io/tx/', base:'https://basescan.org/tx/',
+    arbitrum:'https://arbiscan.io/tx/', solana:'https://solscan.io/tx/' };
+  window.open((exp[s.chain]||'')+extractHash(s.txHash)+'','_blank');
+}
+
+function delTrade(id) {
+  if (!confirm('Remove this trade?')) return;
+  S.trades = S.trades.filter(t => t.id !== id);
+  persist(); renderPortfolio();
+}
+
+function openTx(id) {
+  const t = S.trades.find(x => x.id===id);
+  if (!t?.txHash) return;
+  const exp = { ethereum:'https://etherscan.io/tx/', base:'https://basescan.org/tx/',
+    arbitrum:'https://arbiscan.io/tx/', solana:'https://solscan.io/tx/' };
+  window.open((exp[t.chain]||'')+t.txHash,'_blank');
+}
+
+// ─── SETTINGS ──────────────────────────────────────────────
+function saveSettings() {
+  S.keys.eth    = document.getElementById('k-eth').value.trim();
+  S.keys.base   = document.getElementById('k-base').value.trim();
+  S.keys.arb    = document.getElementById('k-arb').value.trim();
+  S.keys.helius  = document.getElementById('k-helius').value.trim();
+  S.keys.opensea = document.getElementById('k-opensea').value.trim();
+  persist(); toast('Settings saved ✓');
+}
+
+// ─── CLOUD SYNC SETTINGS ───────────────────────────────────
+function genSyncCode() {
+  const rnd = crypto.getRandomValues(new Uint8Array(18));
+  const code = btoa(String.fromCharCode(...rnd)).replace(/[+/=]/g,'').slice(0,24);
+  document.getElementById('k-sb-code').value = code;
+  toast('Sync code generated — use the same one on your other device.');
+}
+async function connectSync() {
+  S.sync.url  = document.getElementById('k-sb-url').value.trim();
+  S.sync.key  = document.getElementById('k-sb-key').value.trim();
+  S.sync.code = document.getElementById('k-sb-code').value.trim();
+  if (!syncEnabled()) { toast('Fill in the URL, key and sync code first.'); return; }
+  persistLocal();
+  toast('Connecting…');
+  await doPull(true);     // merge with whatever is already in the cloud
+}
+
+async function testJupiter() {
+  const el = document.getElementById('jupiter-test-result');
+  el.textContent = 'Testing…'; el.style.color = 'var(--muted)';
+
+  // Test DexScreener with SOL mint
+  const SOL = 'So11111111111111111111111111111111111111112';
+  try {
+    const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${SOL}`);
+    const d = await r.json();
+    const pairs = (d.pairs || []).filter(p => p.chainId === 'solana' && p.priceUsd);
+    if (pairs.length > 0) {
+      pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
+      const price = parseFloat(pairs[0].priceUsd);
+      el.textContent = `✓ DexScreener works — SOL = $${price.toFixed(2)}`;
+      el.style.color = 'var(--green)';
+      return;
+    }
+    el.textContent = '✗ No pairs returned — unexpected response';
+    el.style.color = 'var(--red)';
+  } catch(e) {
+    el.textContent = `✗ ${e.message}`;
+    el.style.color = 'var(--red)';
+  }
+}
+
+// ─── DATA ──────────────────────────────────────────────────
+function exportData() {
+  const blob = new Blob([JSON.stringify({trades:S.trades,keys:S.keys},null,2)],{type:'application/json'});
+  const a = Object.assign(document.createElement('a'),{
+    href:URL.createObjectURL(blob),
+    download:`cryptotrack_${new Date().toISOString().slice(0,10)}.json`
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function importData(e) {
+  const f = e.target.files[0]; if (!f) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const d = JSON.parse(ev.target.result);
+      if (d.trades) { S.trades = d.trades; if(d.keys) S.keys={...S.keys,...d.keys}; persist(); renderPortfolio(); toast(`Imported ${d.trades.length} trades ✓`); }
+    } catch { toast('Invalid JSON file.'); }
+  };
+  reader.readAsText(f);
+}
+function clearAll() {
+  if (!confirm('Delete ALL trades? This cannot be undone.')) return;
+  S.trades = []; persist(); renderPortfolio(); toast('Cleared.');
+}
+
+// ─── HELPERS ───────────────────────────────────────────────
+function fmt(n, d=2) {
+  if (!isFinite(n)) return '0';
+  return n.toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+}
+function fmtAmt(n, type) {
+  if (type==='nft') return '1 NFT';
+  if (n>=1e6) return fmt(n/1e6,2)+'M';
+  if (n>=1e3) return fmt(n/1e3,2)+'K';
+  return fmt(n, n<1?6:2);
+}
+function fmtDate(iso) {
+  try { return new Date(iso).toLocaleDateString('en-US',{day:'numeric',month:'short',year:'numeric'}); }
+  catch { return iso; }
+}
+function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.classList.add('show');
+  setTimeout(()=>el.classList.remove('show'), 2800);
+}
+
+// ─── INIT ──────────────────────────────────────────────────
+loadState();
+renderPortfolio();
+// Pull the latest cloud copy on open, then refresh prices/backfill, then re-render.
+(syncEnabled() ? doPull() : Promise.resolve())
+  .then(refreshEthRate)
+  .then(backfillNativeUsd)
+  .then(() => renderPortfolio());
+// Re-check the cloud whenever you return to the tab (e.g. switching from phone to laptop).
+window.addEventListener('focus', () => { if (syncEnabled()) doPull(); });
+</script>
+</body>
+</html>
