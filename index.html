@@ -438,49 +438,29 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 
 <!-- ═══════════════════════════════ SETTINGS ═══════════════════════════════ -->
 <div class="tab-pane" id="tab-settings">
-  <!-- Cloud Sync (Supabase) -->
+  <!-- Cloud Sync (Supabase account) -->
   <div class="card" style="border-color:#3ecf8e44;">
-    <div class="card-title" style="color:#3ecf8e;">Cloud Sync — phone &amp; laptop (Supabase)</div>
-    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">
-      Keep the same trades on every device. Set this up once per device — paste the three values below and hit <strong style="color:var(--text)">Connect</strong>. Use the <strong style="color:var(--text)">same sync code</strong> on your phone and laptop to link them.
-    </p>
-    <div class="form-grid">
-      <div class="form-row"><label>Supabase Project URL</label><input id="k-sb-url" placeholder="https://xxxx.supabase.co"></div>
-      <div class="form-row"><label>Supabase anon key</label><input id="k-sb-key" placeholder="eyJhbGci…"></div>
+    <div class="card-title" style="color:#3ecf8e;">Cloud Sync — your account</div>
+    <div id="sb-signed-out">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">
+        Sign in to sync your trades across phone &amp; laptop. We'll email you a one-tap sign-in link — no password.
+      </p>
+      <div class="form-row"><label>Email</label><input id="sb-email" type="email" placeholder="you@email.com" autocomplete="email"></div>
+      <button class="btn btn-primary" onclick="sendMagicLink()">Send sign-in link</button>
     </div>
-    <div class="form-row">
-      <label>Sync code (your private link between devices)</label>
-      <div style="display:flex;gap:8px;">
-        <input id="k-sb-code" placeholder="a long secret code" style="flex:1;">
-        <button class="btn btn-secondary" style="white-space:nowrap;" onclick="genSyncCode()">Generate</button>
+    <div id="sb-signed-in" style="display:none;">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">
+        Signed in as <strong id="sb-user-email" style="color:var(--text)"></strong> — your trades sync automatically across your devices.
+      </p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="syncNow()">Sync now</button>
+        <button class="btn btn-secondary" onclick="signOut()">Sign out</button>
       </div>
     </div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:4px;">
-      <button class="btn btn-primary" onclick="connectSync()">Connect</button>
-      <button class="btn btn-secondary" onclick="syncNow()">Sync now</button>
-      <span id="sync-status" style="font-size:12px;color:var(--muted);"></span>
-    </div>
-    <details style="margin-top:16px;">
-      <summary>First-time setup — create your free Supabase backend (≈5 min)</summary>
-      <ol style="font-size:13px;color:var(--muted);padding-left:18px;line-height:1.9;margin-top:10px;">
-        <li>Go to <strong style="color:var(--text)">supabase.com</strong> → sign up (free) → <strong style="color:var(--text)">New project</strong>. Pick any name &amp; password, wait ~2 min for it to build.</li>
-        <li>Open the <strong style="color:var(--text)">SQL Editor</strong> (left sidebar), paste the snippet below, and click <strong style="color:var(--text)">Run</strong>:</li>
-      </ol>
-      <pre style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11.5px;overflow-x:auto;color:var(--text);line-height:1.5;">create table if not exists tracker (
-  id text primary key,
-  data jsonb,
-  updated_at timestamptz default now()
-);
-alter table tracker enable row level security;
-create policy "sync access" on tracker
-  for all to anon using (true) with check (true);</pre>
-      <ol start="3" style="font-size:13px;color:var(--muted);padding-left:18px;line-height:1.9;">
-        <li>Go to <strong style="color:var(--text)">Project Settings → API</strong>. Copy the <strong style="color:var(--text)">Project URL</strong> and the <strong style="color:var(--text)">anon public</strong> key into the boxes above.</li>
-        <li>Click <strong style="color:var(--text)">Generate</strong> for a sync code, then <strong style="color:var(--text)">Connect</strong>.</li>
-        <li>On your phone, open the same site, paste the <strong style="color:var(--text)">same three values</strong> (same sync code!), and Connect. Done — they now share data.</li>
-      </ol>
-      <p style="font-size:12px;color:var(--muted);margin-top:8px;">Your data sits in your own private Supabase project. The anon key only lives on your devices, never in the public page.</p>
-    </details>
+    <div style="margin-top:12px;"><span id="sync-status" style="font-size:12px;color:var(--muted);"></span></div>
+    <p style="font-size:12px;color:var(--muted);margin-top:12px;">
+      To use this on a new device, just open this site and sign in with the same email. Your trades follow your account — nothing to copy or paste.
+    </p>
   </div>
 
   <!-- DexScreener — Solana live prices -->
@@ -646,7 +626,16 @@ create policy "sync access" on tracker
   </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+// ─── SUPABASE ACCOUNT / SYNC ───────────────────────────────
+const SB_URL  = 'https://ecybxggndoqmumxagtoe.supabase.co';
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVjeWJ4Z2duZG9xbXVteGFndG9lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIwNDUyMTQsImV4cCI6MjA5NzYyMTIxNH0.-5rGuI-igKgVejRVhOk1D25pOPCzrCz3Q_7GF5doOWA';
+const sb = (window.supabase && SB_URL.indexOf('__') < 0)
+  ? window.supabase.createClient(SB_URL, SB_ANON, { auth:{ persistSession:true, autoRefreshToken:true, detectSessionInUrl:true } })
+  : null;
+let _user = null;
+
 // ─── CONFIG ────────────────────────────────────────────────
 const CHAINS = {
   ethereum: { name:'Ethereum', ccy:'ETH', decimals:18, rpc:'https://ethereum-rpc.publicnode.com',     chainid:1,     cg:'ethereum',     color:'#627eea' },
@@ -761,9 +750,6 @@ function loadState() {
   document.getElementById('k-arb').value    = S.keys.arb    || '';
   document.getElementById('k-helius').value  = S.keys.helius  || '';
   document.getElementById('k-opensea').value = S.keys.opensea || '';
-  document.getElementById('k-sb-url').value  = S.sync.url  || '';
-  document.getElementById('k-sb-key').value  = S.sync.key  || '';
-  document.getElementById('k-sb-code').value = S.sync.code || '';
 }
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
@@ -776,34 +762,28 @@ function persist() {
   schedulePush();
 }
 
-// ─── CLOUD SYNC (Supabase) ─────────────────────────────────
-// All trades live in a single row keyed by your private sync code. Each device
-// is configured once in Settings; nothing secret lives in the page itself.
+// ─── CLOUD SYNC (Supabase account) ─────────────────────────
+// You sign in with an email magic link; your trades live in a private per-account
+// row in the `portfolios` table. The whole dataset is one JSON blob (last-write-wins).
 let _syncBusy = false, _pushTimer = null;
-function syncEnabled() { const c = S.sync; return !!(c && c.url && c.key && c.code); }
+function syncEnabled() { return !!(sb && _user); }
 function setSyncStatus(msg, kind) {
   const el = document.getElementById('sync-status');
   if (!el) return;
   el.textContent = msg;
   el.style.color = kind==='err' ? 'var(--red)' : kind==='ok' ? 'var(--green)' : 'var(--muted)';
 }
-function sbHeaders() {
-  const k = S.sync.key;
-  return { 'apikey':k, 'Authorization':`Bearer ${k}`, 'Content-Type':'application/json' };
-}
-function sbBase() { return S.sync.url.replace(/\/+$/,'') + '/rest/v1/tracker'; }
 
 async function pullRemote() {
-  const url = `${sbBase()}?id=eq.${encodeURIComponent(S.sync.code)}&select=data`;
-  const r = await fetch(url, { headers: sbHeaders() });
-  if (!r.ok) throw new Error('HTTP '+r.status);
-  const rows = await r.json();
-  return rows[0]?.data || null;
+  const { data, error } = await sb.from('portfolios').select('data').eq('user_id', _user.id).maybeSingle();
+  if (error) throw error;
+  return data?.data || null;
 }
 async function pushRemote() {
-  const body = [{ id: S.sync.code, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt }, updated_at: new Date().toISOString() }];
-  const r = await fetch(sbBase(), { method:'POST', headers:{ ...sbHeaders(), 'Prefer':'resolution=merge-duplicates' }, body: JSON.stringify(body) });
-  if (!r.ok) throw new Error('HTTP '+r.status);
+  const { error } = await sb.from('portfolios').upsert(
+    { user_id: _user.id, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt }, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id' });
+  if (error) throw error;
 }
 
 function schedulePush() {
@@ -815,10 +795,10 @@ async function doPush() {
   if (!syncEnabled() || _syncBusy) return;
   _syncBusy = true; setSyncStatus('Saving…');
   try { await pushRemote(); setSyncStatus('Synced ✓', 'ok'); }
-  catch(e) { setSyncStatus('Sync error — check Settings', 'err'); }
+  catch(e) { setSyncStatus('Sync error — '+(e.message||'try again'), 'err'); }
   finally { _syncBusy = false; }
 }
-// Pull the cloud copy; adopt it if it's newer than this device's data.
+// Pull this account's cloud copy; adopt it if it's newer than this device's data.
 async function doPull(announce) {
   if (!syncEnabled()) return;
   setSyncStatus('Checking…');
@@ -832,26 +812,65 @@ async function doPull(announce) {
         if (remote.ethUsd) S.ethUsd = remote.ethUsd;
         S.updatedAt = remoteU;
         persistLocal();
-        loadState();           // refresh settings fields with synced keys
+        loadState();
         renderPortfolio();
         setSyncStatus('Synced ✓ (updated from cloud)', 'ok');
-        if (announce) toast('Pulled latest from cloud ✓');
+        if (announce) toast('Pulled latest from your account ✓');
       } else {
         setSyncStatus('Synced ✓', 'ok');
         if ((S.updatedAt || 0) > remoteU) doPush();   // this device is ahead
         else if (announce) toast('Already up to date ✓');
       }
     } else {
-      await doPush();          // nothing in the cloud yet → seed it
-      setSyncStatus('Synced ✓ (first upload)', 'ok');
-      if (announce) toast('Uploaded to cloud ✓');
+      await doPush();          // account is empty → seed it with this device's trades (migration)
+      setSyncStatus('Synced ✓ (uploaded your trades)', 'ok');
+      if (announce) toast('Your trades are now in your account ✓');
     }
   } catch(e) {
-    setSyncStatus('Sync error — check Settings', 'err');
-    if (announce) toast('Could not connect — check your Supabase details.');
+    setSyncStatus('Sync error — '+(e.message||'try again'), 'err');
+    if (announce) toast('Could not sync — '+(e.message||'try again'));
   }
 }
 function syncNow() { doPull(true); }
+
+// ─── AUTH (email magic link) ───────────────────────────────
+function renderAuthUI() {
+  const outEl = document.getElementById('sb-signed-out');
+  const inEl  = document.getElementById('sb-signed-in');
+  if (!outEl || !inEl) return;
+  if (_user) {
+    document.getElementById('sb-user-email').textContent = _user.email || 'signed in';
+    outEl.style.display = 'none'; inEl.style.display = 'block';
+  } else {
+    outEl.style.display = 'block'; inEl.style.display = 'none';
+  }
+}
+async function sendMagicLink() {
+  if (!sb) { toast('Sync unavailable — the login library did not load.'); return; }
+  const email = document.getElementById('sb-email').value.trim();
+  if (!email) { toast('Enter your email first.'); return; }
+  setSyncStatus('Sending sign-in link…');
+  const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
+  if (error) { setSyncStatus('Error: '+error.message, 'err'); toast(error.message); }
+  else { setSyncStatus('Check your inbox for the sign-in link.', 'ok'); toast('Magic link sent — check your email.'); }
+}
+async function signOut() {
+  if (sb) await sb.auth.signOut();
+  _user = null; renderAuthUI(); setSyncStatus('Signed out');
+}
+async function initAuth() {
+  if (!sb) { setSyncStatus('Sync unavailable — login library blocked.', 'err'); renderAuthUI(); return; }
+  const { data: { session } } = await sb.auth.getSession();
+  _user = session?.user || null;
+  renderAuthUI();
+  sb.auth.onAuthStateChange((_event, sess) => {
+    const was = _user?.id;
+    _user = sess?.user || null;
+    renderAuthUI();
+    if (_user && _user.id !== was) doPull(true);   // pull on fresh sign-in
+  });
+  if (_user) await doPull();
+}
 
 // ─── TABS ──────────────────────────────────────────────────
 function switchTab(tab, btn) {
@@ -2258,23 +2277,6 @@ function saveSettings() {
   persist(); toast('Settings saved ✓');
 }
 
-// ─── CLOUD SYNC SETTINGS ───────────────────────────────────
-function genSyncCode() {
-  const rnd = crypto.getRandomValues(new Uint8Array(18));
-  const code = btoa(String.fromCharCode(...rnd)).replace(/[+/=]/g,'').slice(0,24);
-  document.getElementById('k-sb-code').value = code;
-  toast('Sync code generated — use the same one on your other device.');
-}
-async function connectSync() {
-  S.sync.url  = document.getElementById('k-sb-url').value.trim();
-  S.sync.key  = document.getElementById('k-sb-key').value.trim();
-  S.sync.code = document.getElementById('k-sb-code').value.trim();
-  if (!syncEnabled()) { toast('Fill in the URL, key and sync code first.'); return; }
-  persistLocal();
-  toast('Connecting…');
-  await doPull(true);     // merge with whatever is already in the cloud
-}
-
 async function testJupiter() {
   const el = document.getElementById('jupiter-test-result');
   el.textContent = 'Testing…'; el.style.color = 'var(--muted)';
@@ -2350,12 +2352,12 @@ function toast(msg) {
 // ─── INIT ──────────────────────────────────────────────────
 loadState();
 renderPortfolio();
-// Pull the latest cloud copy on open, then refresh prices/backfill, then re-render.
-(syncEnabled() ? doPull() : Promise.resolve())
+// Restore the login session (and pull this account's data), then refresh prices.
+initAuth()
   .then(refreshEthRate)
   .then(backfillNativeUsd)
   .then(() => renderPortfolio());
-// Re-check the cloud whenever you return to the tab (e.g. switching from phone to laptop).
+// Re-check the account whenever you return to the tab (e.g. switching from phone to laptop).
 window.addEventListener('focus', () => { if (syncEnabled()) doPull(); });
 </script>
 </body>
