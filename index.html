@@ -761,7 +761,7 @@ function isStable(ccy) { return STABLECOINS.has(ccy); }
 
 // ─── STATE ─────────────────────────────────────────────────
 let S = { trades:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
-  sync:{url:'',key:'',code:''}, updatedAt:0,
+  sync:{url:'',key:'',code:''}, updatedAt:0, tombstones:{},
   stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 },     // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
   acctNames:{}, stockFilter:'all',                            // custom portfolio labels per broker; current stocks filter (runtime)
   assetImg:{}, view:'current' };                              // cached logos; summary view 'current' (open holdings) vs 'alltime'
@@ -852,7 +852,9 @@ function loadState() {
     if (d.acctNames) S.acctNames = d.acctNames;
     if (d.assetImg) S.assetImg = d.assetImg;
     if (d.view) S.view = d.view;
+    if (d.tombstones) S.tombstones = d.tombstones;
   } catch {}
+  migrateStamps();
   document.getElementById('k-eth').value    = S.keys.eth    || '';
   document.getElementById('k-base').value   = S.keys.base   || '';
   document.getElementById('k-arb').value    = S.keys.arb    || '';
@@ -863,13 +865,55 @@ function loadState() {
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
   localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt,
-    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view }));
+    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view, tombstones: S.tombstones }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
 function persist() {
   S.updatedAt = Date.now();
   persistLocal();
   schedulePush();
+}
+
+// ─── PER-RECORD MERGE (prevents stale device overwrites) ───
+// Every trade/stock carries `_m` = when the user last changed it. Sync MERGES by
+// id keeping the newest version of each record, so a device that's behind gains
+// missing trades instead of erasing them. Deletes are remembered as tombstones
+// (id → time) so a removed trade stays gone and can't be resurrected by a stale device.
+function touch(rec) { if (rec) rec._m = Date.now(); return rec; }
+// Give pre-existing records a stamp derived from their creation id, so merging
+// works on data created before this feature shipped.
+function migrateStamps() {
+  if (!S.tombstones) S.tombstones = {};
+  const seed = r => { if (r && !r._m) r._m = parseInt(r.id, 10) || 1; };
+  (S.trades||[]).forEach(seed);
+  (S.stocks||[]).forEach(seed);
+}
+// Record that a record id was deleted, at this moment.
+function tombstone(id) { if (id) S.tombstones[id] = Date.now(); }
+// Merge two record lists by id (newest `_m` wins), dropping anything tombstoned.
+function mergeById(localArr, remoteArr, tombs) {
+  const byId = new Map();
+  (localArr||[]).forEach(r => byId.set(r.id, r));
+  (remoteArr||[]).forEach(r => {
+    const ex = byId.get(r.id);
+    if (!ex || (r._m||0) > (ex._m||0)) byId.set(r.id, r);
+  });
+  return [...byId.values()].filter(r => {
+    const t = tombs[r.id];
+    return !(t && t >= (r._m||0));   // deleted after this record's last edit → stays deleted
+  });
+}
+// Union of two tombstone maps, keeping the later deletion time.
+function mergeTombstones(a, b) {
+  const out = { ...(a||{}) };
+  for (const [id, ts] of Object.entries(b||{})) if (!out[id] || ts > out[id]) out[id] = ts;
+  return out;
+}
+// Merge live-price maps ({TICKER:{price,ts}}) keeping the fresher quote per ticker.
+function mergePx(a, b) {
+  const out = { ...(a||{}) };
+  for (const [k, v] of Object.entries(b||{})) if (!out[k] || (v?.ts||0) > (out[k]?.ts||0)) out[k] = v;
+  return out;
 }
 
 // ─── CLOUD SYNC (Supabase account) ─────────────────────────
@@ -892,7 +936,7 @@ async function pullRemote() {
 async function pushRemote() {
   const { error } = await sb.from('portfolios').upsert(
     { user_id: _user.id, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt,
-        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg }, updated_at: new Date().toISOString() },
+        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, tombstones:S.tombstones }, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' });
   if (error) throw error;
 }
@@ -909,46 +953,52 @@ async function doPush() {
   catch(e) { setSyncStatus('Sync error — '+(e.message||'try again'), 'err'); }
   finally { _syncBusy = false; }
 }
-// Pull this account's cloud copy; adopt it if it's newer than this device's data.
+// Pull this account's cloud copy and MERGE it with this device — newest version of
+// each trade/stock wins, deletes are honoured. Nothing the device has gets dropped,
+// so a stale device can never overwrite or erase trades it simply hasn't seen.
 async function doPull(announce) {
   if (!syncEnabled()) return;
   setSyncStatus('Checking…');
   try {
     const remote = await pullRemote();
-    const localEmpty = !(S.trades && S.trades.length) && !(S.stocks && S.stocks.length);
-    if (remote) {
-      const remoteU = remote.updatedAt || 0;
-      const remoteHasData = ((remote.trades&&remote.trades.length)||0) + ((remote.stocks&&remote.stocks.length)||0) > 0;
-      // Adopt remote if it's newer OR if this device is empty and the cloud has data (never let an empty device win)
-      if (remoteU > (S.updatedAt || 0) || (localEmpty && remoteHasData)) {
-        S.trades = remote.trades || S.trades;
-        if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
-        if (remote.ethUsd) S.ethUsd = remote.ethUsd;
-        if (remote.stocks)  S.stocks = remote.stocks;
-        if (remote.stockPx) S.stockPx = remote.stockPx;
-        if (remote.baseCcy) S.baseCcy = remote.baseCcy;
-        if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
-        if (remote.acctNames) S.acctNames = remote.acctNames;
-        if (remote.assetImg) S.assetImg = remote.assetImg;
-        S.updatedAt = remoteU;
-        persistLocal();
-        loadState();
-        renderPortfolio();
-        renderStocks();
-        setSyncStatus('Synced ✓ (updated from cloud)', 'ok');
-        if (announce) toast('Pulled latest from your account ✓');
-      } else {
-        setSyncStatus('Synced ✓', 'ok');
-        if ((S.updatedAt || 0) > remoteU && !localEmpty) doPush();   // only a non-empty device may push ahead
-        else if (announce) toast('Already up to date ✓');
-      }
-    } else if (!localEmpty) {
-      await doPush();          // account is empty → seed it with this device's data (migration)
-      setSyncStatus('Synced ✓ (uploaded your trades)', 'ok');
-      if (announce) toast('Your trades are now in your account ✓');
-    } else {
-      setSyncStatus('Synced ✓', 'ok');
+    if (!remote) {
+      // Account is empty → seed it with this device's data (first-time migration).
+      const localEmpty = !(S.trades && S.trades.length) && !(S.stocks && S.stocks.length);
+      if (!localEmpty) { await doPush(); setSyncStatus('Synced ✓ (uploaded your trades)', 'ok'); if (announce) toast('Your trades are now in your account ✓'); }
+      else setSyncStatus('Synced ✓', 'ok');
+      return;
     }
+
+    // Snapshot to detect whether the merge actually changed anything on this device.
+    const before = JSON.stringify([S.trades, S.stocks, S.tombstones]);
+
+    // Merge record lists by id (newest edit wins), honouring deletions from both sides.
+    S.tombstones = mergeTombstones(S.tombstones, remote.tombstones);
+    S.trades = mergeById(S.trades, remote.trades, S.tombstones);
+    S.stocks = mergeById(S.stocks, remote.stocks, S.tombstones);
+    S.stockPx = mergePx(S.stockPx, remote.stockPx);
+
+    // Config/scalar fields rarely conflict — adopt the cloud's only if it's the newer write.
+    if ((remote.updatedAt || 0) > (S.updatedAt || 0)) {
+      if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
+      if (remote.ethUsd) S.ethUsd = remote.ethUsd;
+      if (remote.baseCcy) S.baseCcy = remote.baseCcy;
+      if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
+      if (remote.acctNames) S.acctNames = remote.acctNames;
+      if (remote.assetImg)  S.assetImg = remote.assetImg;
+    }
+
+    const changed = JSON.stringify([S.trades, S.stocks, S.tombstones]) !== before;
+    S.updatedAt = Date.now();
+    persistLocal();
+    renderPortfolio();
+    renderStocks();
+
+    // Push the merged result back so every device converges on the same union.
+    await doPush();
+
+    setSyncStatus(changed ? 'Synced ✓ (merged with cloud)' : 'Synced ✓', 'ok');
+    if (announce) toast(changed ? 'Merged latest from your account ✓' : 'Already up to date ✓');
   } catch(e) {
     setSyncStatus('Sync error — '+(e.message||'try again'), 'err');
     if (announce) toast('Could not sync — '+(e.message||'try again'));
@@ -1402,7 +1452,7 @@ function addTrade() {
   // Stablecoin costs are already in USD (1:1), so nativeUsd = 1
   const entryNativeUsd = isStable(p.ccy) ? 1 : (p.nativeUsd || 0);
   S.trades.push({
-    id: Date.now()+'', txHash:p.txHash, chain:p.chain, type, date:p.date, notes,
+    id: Date.now()+'', _m: Date.now(), txHash:p.txHash, chain:p.chain, type, date:p.date, notes,
     asset:  { name, symbol, contract, tokenId:p.tokenId||null, amount },
     entry:  { noFee, fee:p.fee, withFee:noFee+(isStable(p.ccy)?0:p.fee), ccy:p.ccy, feeCcy:p.feeCcy||p.ccy, nativeUsd:entryNativeUsd },
     priceLive: null
@@ -1432,7 +1482,7 @@ function addManual() {
   const dateVal = document.getElementById('m-date').value;
 
   S.trades.push({
-    id: Date.now()+'', txHash:null, chain, notes: document.getElementById('m-notes').value.trim(),
+    id: Date.now()+'', _m: Date.now(), txHash:null, chain, notes: document.getElementById('m-notes').value.trim(),
     type:   document.getElementById('m-type').value,
     date:   dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
     asset:  {
@@ -2093,7 +2143,7 @@ async function editPrice(id) {
       t.priceLive = num;                                 // ETH directly
     }
     // entry.nativeUsd already holds the ETH price at purchase — leave it.
-    syncGroupPrice(t);
+    syncGroupPrice(t); touch(t);
     persist(); renderPortfolio();
     const usd = S.ethUsd ? ` (≈ $${fmt(t.priceLive*S.ethUsd,2)})` : '';
     toast(`${t.asset.name} floor set to ${fmt(t.priceLive,4)} ETH${usd} ✓`);
@@ -2104,7 +2154,7 @@ async function editPrice(id) {
   if (isNaN(price) || price < 0) { toast('Enter a valid number.'); return; }
   t.priceLive = price;
   if (!t.entry.nativeUsd) t.entry.nativeUsd = 1;          // manual coin price is entered in USD
-  syncGroupPrice(t);
+  syncGroupPrice(t); touch(t);
   persist(); renderPortfolio();
   toast(`${t.asset.name} price set to $${fmt(price, price<0.001?8:4)} ✓`);
 }
@@ -2113,7 +2163,7 @@ function clearPrice(id) {
   const t = S.trades.find(x => x.id===id);
   if (!t) return;
   t.priceLive = null;
-  syncGroupPrice(t);
+  syncGroupPrice(t); touch(t);
   persist(); renderPortfolio();
 }
 
@@ -2392,7 +2442,7 @@ async function submitSell() {
   }
 
   S.trades.push({
-    id: Date.now()+'', kind:'sell',
+    id: Date.now()+'', _m: Date.now(), kind:'sell',
     chain: t0.chain, type: t0.type,
     date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
     txHash: document.getElementById('sell-tx-input').value.trim() || null,
@@ -2421,6 +2471,7 @@ function openSellTx(id) {
 
 function delTrade(id) {
   if (!confirm('Remove this trade?')) return;
+  tombstone(id);
   S.trades = S.trades.filter(t => t.id !== id);
   persist(); renderPortfolio();
 }
@@ -2503,6 +2554,7 @@ function importData(e) {
 }
 function clearAll() {
   if (!confirm('Delete ALL trades? This cannot be undone.')) return;
+  S.trades.forEach(t => tombstone(t.id));
   S.trades = []; persist(); renderPortfolio(); toast('Cleared.');
 }
 
@@ -2637,7 +2689,7 @@ function importStockCsv(ev) {
     const have = new Set(S.stocks.map(stockSig));
     let added=0;
     for (const p of parsed) {
-      const e2 = { id: Date.now()+''+Math.random().toString(36).slice(2,6), kind:p.kind,
+      const e2 = { id: Date.now()+''+Math.random().toString(36).slice(2,6), _m: Date.now(), kind:p.kind,
         broker:p.broker, ticker:(p.ticker||'').toUpperCase(), name:p.name||'', ccy:p.ccy||'USD', date:p.date };
       if (p.shares!=null) e2.shares=p.shares; if (p.price!=null) e2.price=p.price;
       if (p.fees!=null) e2.fees=p.fees; if (p.amount!=null) e2.amount=p.amount;
@@ -2669,7 +2721,7 @@ function addStockManual() {
   const note = document.getElementById('st-note').value.trim();
   const ticker = document.getElementById('st-ticker').value.trim().toUpperCase();
   const name = document.getElementById('st-name').value.trim();
-  const e = { id: Date.now()+'', kind:t, broker, ccy, date, note };
+  const e = { id: Date.now()+'', _m: Date.now(), kind:t, broker, ccy, date, note };
   if (t==='buy' || t==='sell') {
     if (!ticker) { toast('Enter a ticker.'); return; }
     const shares=_sn(document.getElementById('st-shares').value), price=_sn(document.getElementById('st-price').value);
@@ -2729,7 +2781,9 @@ function prefillSell(tk, ccy, broker) {
 }
 function delStock(broker, tk) {
   if (!confirm(`Remove ALL ${tk} entries in ${acctLabel(broker)} (buys, sells, dividends)?`)) return;
-  S.stocks = S.stocks.filter(e => !((e.ticker||'').toUpperCase()===tk && (e.broker||'other')===broker));
+  const match = e => (e.ticker||'').toUpperCase()===tk && (e.broker||'other')===broker;
+  S.stocks.filter(match).forEach(e => tombstone(e.id));
+  S.stocks = S.stocks.filter(e => !match(e));
   persist(); renderStocks();
 }
 
