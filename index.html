@@ -563,6 +563,22 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     </div>
   </div>
 
+  <!-- My Wallets - anchors who "you" are when reading transactions -->
+  <div class="card" style="border-color:#2ecc7133;">
+    <div class="card-title" style="color:#2ecc71;">My Wallets</div>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:14px;">
+      Add every wallet you mint, buy, or sell from — Solana (Phantom) <em>and</em> Ethereum/Base/Arbitrum (MetaMask).
+      This lets the reader recognise <strong style="color:var(--text)">you</strong> in a transaction even when a trading bot or
+      relayer paid the gas, so it can find what you sold and what you received. One address per line; add an optional
+      label after a dash.
+    </p>
+    <div class="form-row">
+      <label>Your wallet addresses</label>
+      <textarea id="k-wallets" rows="4" placeholder="GVuoGZ…  — Phantom main&#10;0xabc123…  — MetaMask" style="width:100%;font-family:monospace;font-size:12px;line-height:1.7;resize:vertical;"></textarea>
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+  </div>
+
   <!-- Solana (Helius) - required for Solana support -->
   <div class="card" style="border-color:#9945ff33;">
     <div class="card-title" style="color:#9945ff;">Solana — Helius API Key (required)</div>
@@ -760,11 +776,24 @@ const STABLECOINS = new Set(['USDC','USDT','DAI','BUSD','FRAX','USDS']);
 function isStable(ccy) { return STABLECOINS.has(ccy); }
 
 // ─── STATE ─────────────────────────────────────────────────
-let S = { trades:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
+let S = { trades:[], wallets:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
   sync:{url:'',key:'',code:''}, updatedAt:0, tombstones:{},
   stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 },     // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
   acctNames:{}, stockFilter:'all',                            // custom portfolio labels per broker; current stocks filter (runtime)
   assetImg:{}, view:'current' };                              // cached logos; summary view 'current' (open holdings) vs 'alltime'
+
+// My wallets — the addresses Zul mints/buys/sells from. Used to identify "me" in a
+// transaction even when a bot/relayer paid the gas (so the fee-payer ≠ the owner).
+function myWalletAddrs() { return (S.wallets || []).map(w => (w.addr || '').trim()).filter(Boolean); }
+function isMyWallet(addr, chain) {
+  if (!addr) return false;
+  const list = myWalletAddrs();
+  if (!list.length) return false;
+  if (chain === 'solana') return list.includes(addr);          // base58 — case-sensitive
+  const a = addr.toLowerCase();                                 // EVM — case-insensitive
+  return list.some(w => w.toLowerCase() === a);
+}
+function haveWallets() { return myWalletAddrs().length > 0; }
 
 // Grouping: multiple buys of the same asset are merged into one position row.
 let expandedGroups = new Set();   // which group keys are expanded to show individual buys
@@ -842,6 +871,7 @@ function loadState() {
     const d = JSON.parse(localStorage.getItem('ctrack') || '{}');
     S.trades = d.trades || [];
     if (d.keys) S.keys = { ...S.keys, ...d.keys };
+    if (Array.isArray(d.wallets)) S.wallets = d.wallets;
     if (d.ethUsd) S.ethUsd = d.ethUsd;   // last known ETH price, for instant NFT USD display
     if (d.sync) S.sync = { ...S.sync, ...d.sync };
     if (d.updatedAt) S.updatedAt = d.updatedAt;
@@ -861,10 +891,12 @@ function loadState() {
   document.getElementById('k-helius').value  = S.keys.helius  || '';
   document.getElementById('k-opensea').value = S.keys.opensea || '';
   const fh = document.getElementById('k-finnhub'); if (fh) fh.value = S.keys.finnhub || '';
+  const wt = document.getElementById('k-wallets');
+  if (wt) wt.value = (S.wallets || []).map(w => w.label ? `${w.addr}  — ${w.label}` : w.addr).join('\n');
 }
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
-  localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt,
+  localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, wallets: S.wallets, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt,
     stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view, tombstones: S.tombstones }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
@@ -935,7 +967,7 @@ async function pullRemote() {
 }
 async function pushRemote() {
   const { error } = await sb.from('portfolios').upsert(
-    { user_id: _user.id, data: { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt,
+    { user_id: _user.id, data: { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt,
         stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, tombstones:S.tombstones }, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' });
   if (error) throw error;
@@ -981,6 +1013,7 @@ async function doPull(announce) {
     // Config/scalar fields rarely conflict — adopt the cloud's only if it's the newer write.
     if ((remote.updatedAt || 0) > (S.updatedAt || 0)) {
       if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
+      if (Array.isArray(remote.wallets)) S.wallets = remote.wallets;
       if (remote.ethUsd) S.ethUsd = remote.ethUsd;
       if (remote.baseCcy) S.baseCcy = remote.baseCcy;
       if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
@@ -1294,20 +1327,26 @@ function parseSolana(d) {
   const date = tx.blockTime ? new Date(tx.blockTime*1000).toISOString() : new Date().toISOString();
   const fee  = (meta.fee||0) / 1e9; // SOL
 
-  // Signer is always account index 0
+  // "Me" = the fee-payer OR any of my registered wallets (so bot/relayer buys read too).
   const accounts = tx.transaction.message.accountKeys || [];
-  const signerPub = typeof accounts[0]==='string' ? accounts[0] : accounts[0]?.pubkey;
+  const keys = accounts.map(k => typeof k === 'string' ? k : k.pubkey);
+  const signerPub = keys[0];
+  const mine = o => o === signerPub || isMyWallet(o, 'solana');
 
   const preB  = meta.preBalances  || [];
   const postB = meta.postBalances || [];
-  const solChange = (preB[0] - postB[0]) / 1e9; // positive = signer spent SOL
+  // SOL spent across all of my accounts (fee-payer + my wallets), de-duped by index.
+  const myIdx = new Set();
+  keys.forEach((k,i) => { if (mine(k)) myIdx.add(i); });
+  let solChange = 0;
+  myIdx.forEach(i => { solChange += ((preB[i]||0) - (postB[i]||0)) / 1e9; }); // positive = spent
 
   const preTok  = meta.preTokenBalances  || [];
   const postTok = meta.postTokenBalances || [];
 
-  // Only look at token accounts owned by the signer
-  const signerPre  = preTok.filter(t => t.owner === signerPub);
-  const signerPost = postTok.filter(t => t.owner === signerPub);
+  // Only look at token accounts owned by me
+  const signerPre  = preTok.filter(t => mine(t.owner));
+  const signerPost = postTok.filter(t => mine(t.owner));
 
   // Build per-mint balance change for the signer
   const allMints = new Set([...signerPre.map(t=>t.mint), ...signerPost.map(t=>t.mint)]);
@@ -2260,53 +2299,78 @@ async function fetchSellTx() {
       const d = await fetchSolana(hash);
       const meta = d.tx.meta;
       const accounts = d.tx.transaction.message.accountKeys || [];
-      const signerPub = typeof accounts[0]==='string' ? accounts[0] : accounts[0]?.pubkey;
+      const keys = accounts.map(k => typeof k === 'string' ? k : k.pubkey);
+      const signerPub = keys[0];
       const feeSOL = (meta.fee || 0) / 1e9;
       feeCcy = 'SOL';
 
+      // "Me" = any of my registered wallets. If none are set, fall back to the old
+      // behaviour (the fee-payer is me) so nothing breaks for un-configured users.
+      const mine = o => haveWallets() ? isMyWallet(o, 'solana') : o === signerPub;
+
       const preTok  = meta.preTokenBalances  || [];
       const postTok = meta.postTokenBalances || [];
-      const signerPre  = preTok.filter(x => x.owner === signerPub);
-      const signerPost = postTok.filter(x => x.owner === signerPub);
+      const WSOL = 'So11111111111111111111111111111111111111112';
+      const sumTok = (arr, ownerFn, mintFn) => arr
+        .filter(x => ownerFn(x.owner) && mintFn(x.mint))
+        .reduce((s,x) => s + parseFloat(x.uiTokenAmount?.uiAmountString || '0'), 0);
 
-      // How many of THIS asset left the wallet (quantity sold)
+      // Quantity sold = how much of THIS asset left my wallets. If it left a wallet I
+      // didn't register (e.g. a bot's routing wallet), fall back to ANY owner.
       if (t.asset.contract) {
-        const mp = signerPre.find(x=>x.mint===t.asset.contract);
-        const mq = signerPost.find(x=>x.mint===t.asset.contract);
-        const preA  = parseFloat(mp?.uiTokenAmount?.uiAmountString||'0');
-        const postA = parseFloat(mq?.uiTokenAmount?.uiAmountString||'0');
-        detectedQty = Math.max(0, preA - postA);
+        const c = t.asset.contract;
+        let sold = sumTok(preTok, mine, m=>m===c) - sumTok(postTok, mine, m=>m===c);
+        if (sold <= 1e-9) {
+          // Sold from a wallet I didn't register (e.g. a bot's routing wallet): take the
+          // single biggest drop of this mint across all accounts (the pool's balance goes
+          // UP, so netting across owners would wrongly cancel out — find the largest seller).
+          const owners = new Set([...preTok, ...postTok].filter(x=>x.mint===c).map(x=>x.owner));
+          for (const o of owners) {
+            const drop = sumTok(preTok, w=>w===o, m=>m===c) - sumTok(postTok, w=>w===o, m=>m===c);
+            if (drop > sold) sold = drop;
+          }
+        }
+        detectedQty = Math.max(0, sold);
       }
 
-      // What did signer receive?
-      const allMints = new Set([...signerPre.map(x=>x.mint), ...signerPost.map(x=>x.mint)]);
+      // Net change of every mint across my wallets → positive deltas are what I received.
+      const myMints = new Set([...preTok, ...postTok].filter(x => mine(x.owner)).map(x => x.mint));
       const received = [];
-      for (const mint of allMints) {
-        const pre  = signerPre.find(x=>x.mint===mint);
-        const post = signerPost.find(x=>x.mint===mint);
-        const preAmt  = parseFloat(pre?.uiTokenAmount?.uiAmountString  || '0');
-        const postAmt = parseFloat(post?.uiTokenAmount?.uiAmountString || '0');
-        if (postAmt > preAmt) {
+      let wsolDelta = 0;
+      for (const mint of myMints) {
+        const delta = sumTok(postTok, mine, m=>m===mint) - sumTok(preTok, mine, m=>m===mint);
+        if (mint === WSOL) { wsolDelta += delta; continue; }      // treat wrapped SOL as SOL
+        if (mint === t.asset.contract) continue;                  // that's what I sold, not proceeds
+        if (delta > 1e-9) {
           const info = SOL_TOKENS[mint] || { symbol: mint.slice(0,6)+'…', name: mint.slice(0,8)+'…' };
-          received.push({ mint, amount: postAmt - preAmt, ...info });
+          received.push({ mint, amount: delta, ...info });
         }
       }
 
-      const preSOL  = (meta.preBalances  || [])[0] || 0;
-      const postSOL = (meta.postBalances || [])[0] || 0;
-      const solReceived = (postSOL - preSOL) / 1e9; // positive = received SOL net
+      // Native SOL change across my accounts (+ wrap/unwrap), fall back to the fee-payer.
+      let solReceived = wsolDelta;
+      (meta.preBalances || []).forEach((p,i) => {
+        if (haveWallets() ? mine(keys[i]) : i === 0) solReceived += ((meta.postBalances[i]||0) - p) / 1e9;
+      });
+      if (mine(signerPub)) solReceived += feeSOL;                 // gas I paid isn't lost proceeds
 
-      if (received.length > 0) {
-        const r = received[0];
-        proceedsNoFee   = r.amount;
-        proceedsWithFee = r.amount; // proceeds in stablecoin; fee is separately in SOL
-        ccy = r.symbol;
-      } else if (solReceived > 0) {
-        proceedsNoFee   = solReceived + feeSOL; // add back fee to get gross
-        proceedsWithFee = solReceived;           // net after fee
-        ccy = 'SOL';
+      // Pick proceeds: a stablecoin first, then SOL, then the largest token received.
+      const stableGot = received.filter(r => isStable(r.symbol)).sort((a,b)=>b.amount-a.amount)[0];
+      if (stableGot) {
+        proceedsNoFee = stableGot.amount; proceedsWithFee = stableGot.amount; ccy = stableGot.symbol;
+      } else if (solReceived > 0.000001) {
+        proceedsNoFee = solReceived; proceedsWithFee = Math.max(0, solReceived - feeSOL); ccy = 'SOL';
+      } else if (received.length) {
+        const r = received.sort((a,b)=>b.amount-a.amount)[0];
+        proceedsNoFee = r.amount; proceedsWithFee = r.amount; ccy = r.symbol;
       } else {
-        throw new Error('Could not detect what was received in this transaction.');
+        // Soft fail: couldn't read proceeds — let Zul type them rather than blocking.
+        if (detectedQty > 0) document.getElementById('sell-qty').value = detectedQty;
+        st.textContent = haveWallets()
+          ? `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}, but couldn't auto-detect the proceeds — enter the amount you received below.`
+          : 'Couldn\'t detect proceeds. Add your wallets in Settings → My Wallets, or enter the amount below.';
+        btn.disabled = false;
+        return;
       }
 
       feeCost  = feeSOL;
@@ -2318,14 +2382,17 @@ async function fetchSellTx() {
       const evmData = await fetchEvm(t.chain, hash);
       const { from, valueEth, gasEth, tokens, nfts, e1155, ts } = evmData;
 
-      // How many of THIS asset left the wallet (quantity sold)
+      // "Me" = any of my registered wallets; fall back to the tx sender if none set.
+      const mine = a => haveWallets() ? isMyWallet(a, t.chain) : a.toLowerCase() === from.toLowerCase();
+
+      // How many of THIS asset left my wallet (quantity sold)
       if (t.asset.contract) {
         const ca = t.asset.contract.toLowerCase();
         if (t.type === 'nft') {
-          detectedQty = nfts.filter(n=>n.from.toLowerCase()===from.toLowerCase() && n.contractAddress.toLowerCase()===ca).length
-            + e1155.filter(n=>n.from.toLowerCase()===from.toLowerCase() && n.contractAddress.toLowerCase()===ca).reduce((s,n)=>s+parseInt(n.tokenValue||'1'),0);
+          detectedQty = nfts.filter(n=>mine(n.from) && n.contractAddress.toLowerCase()===ca).length
+            + e1155.filter(n=>mine(n.from) && n.contractAddress.toLowerCase()===ca).reduce((s,n)=>s+parseInt(n.tokenValue||'1'),0);
         } else {
-          for (const x of tokens.filter(x=>x.from.toLowerCase()===from.toLowerCase() && x.contractAddress.toLowerCase()===ca)) {
+          for (const x of tokens.filter(x=>mine(x.from) && x.contractAddress.toLowerCase()===ca)) {
             const dec = parseInt(x.tokenDecimal||'18'); detectedQty += parseInt(x.value)/10**dec;
           }
         }
@@ -2336,21 +2403,26 @@ async function fetchSellTx() {
       nativeUsd = await nativePrice(t.chain);
       sellDate = ts ? new Date(ts*1000).toISOString().slice(0,10) : '';
 
-      // Tokens received by signer (e.g. USDC from selling token)
-      const gotTok = tokens.filter(x => x.to.toLowerCase() === from.toLowerCase());
-      if (gotTok.length > 0) {
-        const tk = gotTok[0];
-        const dec = parseInt(tk.tokenDecimal || '6');
-        proceedsNoFee   = parseInt(tk.value) / 10**dec;
-        proceedsWithFee = proceedsNoFee; // stablecoin; gas is in ETH separately
-        ccy = tk.tokenSymbol;
+      // Tokens received by me (e.g. USDC from selling a token) — prefer a stablecoin.
+      const gotTok = tokens.filter(x => mine(x.to) && x.contractAddress.toLowerCase() !== (t.asset.contract||'').toLowerCase());
+      const decVal = tk => parseInt(tk.value) / 10**parseInt(tk.tokenDecimal || '6');
+      const stableTok = gotTok.filter(tk => isStable(tk.tokenSymbol)).sort((a,b)=>decVal(b)-decVal(a))[0];
+      const bestTok = stableTok || gotTok.sort((a,b)=>decVal(b)-decVal(a))[0];
+      if (bestTok) {
+        proceedsNoFee   = decVal(bestTok);
+        proceedsWithFee = proceedsNoFee; // stablecoin/token; gas is in ETH separately
+        ccy = bestTok.tokenSymbol;
       } else if (valueEth > 0) {
         // ETH received (e.g. selling on some DEXes that return ETH directly)
         proceedsNoFee   = valueEth;
         proceedsWithFee = valueEth - gasEth;
         ccy = CHAINS[t.chain].ccy;
       } else {
-        throw new Error('Could not detect proceeds. The ETH/token received may come via internal txs — enter the amount manually.');
+        // Soft fail: proceeds may arrive via internal txs — let Zul type them in.
+        if (detectedQty > 0) document.getElementById('sell-qty').value = detectedQty;
+        st.textContent = `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}, but the proceeds may have arrived via an internal transfer — enter the amount received below.`;
+        btn.disabled = false;
+        return;
       }
     }
 
@@ -2492,6 +2564,15 @@ function saveSettings() {
   S.keys.helius  = document.getElementById('k-helius').value.trim();
   S.keys.opensea = document.getElementById('k-opensea').value.trim();
   S.keys.finnhub = document.getElementById('k-finnhub').value.trim();
+  const wt = document.getElementById('k-wallets');
+  if (wt) {
+    S.wallets = wt.value.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+      // First whitespace-delimited token is the address; the rest (after an optional
+      // — / – / - / | / , separator) is the label.
+      const m = line.match(/^(\S+)\s*(?:[—–\-|,]+\s*)?(.*)$/);
+      return { addr: m[1], label: (m[2] || '').trim() };
+    });
+  }
   persist(); toast('Settings saved ✓');
 }
 
@@ -2522,7 +2603,7 @@ async function testJupiter() {
 
 // ─── DATA ──────────────────────────────────────────────────
 function exportData() {
-  const payload = { trades:S.trades, keys:S.keys, ethUsd:S.ethUsd, stocks:S.stocks, stockPx:S.stockPx,
+  const payload = { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, stocks:S.stocks, stockPx:S.stockPx,
     baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg };
   const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
   const a = Object.assign(document.createElement('a'),{
@@ -2538,6 +2619,7 @@ function importData(e) {
     try {
       const d = JSON.parse(ev.target.result);
       if (d.trades)  S.trades = d.trades;
+      if (Array.isArray(d.wallets)) S.wallets = d.wallets;
       if (d.keys)    S.keys = { ...S.keys, ...d.keys };
       if (d.ethUsd)  S.ethUsd = d.ethUsd;
       if (d.stocks)  S.stocks = d.stocks;
