@@ -173,6 +173,9 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .pos-row:hover td { background: rgba(77,159,255,.09); }
 .pos-row td:first-child { border-left: 3px solid var(--blue); }
 .pos-row .asset-name { font-weight: 700; }
+/* A fully-sold position: drop the active blue accent so it reads as done, like legacy closed rows. */
+.pos-row.row-closed td { background: rgba(255,255,255,.02); }
+.pos-row.row-closed td:first-child { border-left-color: var(--border); }
 .pos-toggle { display:flex; align-items:center; cursor:pointer; }
 .pos-caret { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border:1px solid var(--border); border-radius:6px; background:var(--surface2); color:var(--text); font-size:11px; user-select:none; flex-shrink:0; transition:all .15s; }
 .pos-toggle:hover .pos-caret { border-color:var(--blue); color:var(--blue); }
@@ -1786,7 +1789,7 @@ function positionHtml(i) {
     ? `${count} buys · ${fullySold?'fully sold':'partially sold'} · ${expanded?'hide':'show'} buys & sells`
     : `blended average · ${expanded?'hide':'show'} the ${count} individual buys`;
 
-  const summary = `<tr class="pos-row">
+  const summary = `<tr class="pos-row${fullySold?' row-closed':''}">
     <td>
       <div class="asset-cell pos-toggle" onclick="toggleGroup(${i})" title="${expanded?'Hide':'Show'} buys${partial?' & sells':''}">
         <span class="pos-caret">${caret}</span>
