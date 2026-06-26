@@ -1720,6 +1720,7 @@ function positionHtml(i) {
   const expanded = expandedGroups.has(g.key);
   const caret = expanded ? '▾' : '▸';
   const partial = m.soldQty > 0;
+  const fullySold = partial && m.remainingQty <= 0;   // every coin exited — show "SOLD", not "PART. SOLD"
 
   // ── Amount (remaining), with "sold X of Y" when partially exited ──
   const amtCell = (isNft ? `${fmt(m.remainingQty,0)} NFTs` : fmtAmt(m.remainingQty,'coin'))
@@ -1782,7 +1783,7 @@ function positionHtml(i) {
   }
 
   const subText = partial
-    ? `${count} buys · ${m.soldQty>0?'partially sold':''} · ${expanded?'hide':'show'} buys & sells`
+    ? `${count} buys · ${fullySold?'fully sold':'partially sold'} · ${expanded?'hide':'show'} buys & sells`
     : `blended average · ${expanded?'hide':'show'} the ${count} individual buys`;
 
   const summary = `<tr class="pos-row">
@@ -1791,7 +1792,7 @@ function positionHtml(i) {
         <span class="pos-caret">${caret}</span>
         ${iconHtml(imgFor((t0.asset.contract||'').toLowerCase()), t0.asset.symbol, ch.color)}
         <div>
-          <div class="asset-name">${esc(t0.asset.name)}<span class="pos-badge">${count} BUY${count>1?'S':''}</span>${partial?'<span class="sold-badge">PART. SOLD</span>':''}</div>
+          <div class="asset-name">${esc(t0.asset.name)}<span class="pos-badge">${count} BUY${count>1?'S':''}</span>${fullySold?'<span class="sold-badge">SOLD</span>':partial?'<span class="sold-badge">PART. SOLD</span>':''}</div>
           <div class="asset-sub">${subText}</div>
         </div>
       </div>
