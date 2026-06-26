@@ -1655,7 +1655,7 @@ function entryTds(t) {
     + `<td style="font-size:12px;">${fmt(t.entry.withFee,5)} ${t.entry.ccy}</td>`;
 }
 
-function rowHtml(t, isLot=false) {
+function rowHtml(t, isLot=false, soldOut=false) {
   const ch = CHAINS[t.chain] || { name:t.chain, color:'#888' };
   const closed = t.status === 'closed';
   const txLink = t.txHash ? `<a onclick="openTx('${t.id}')" style="cursor:pointer">tx ↗</a>` : 'manual';
@@ -1704,8 +1704,8 @@ function rowHtml(t, isLot=false) {
     <td style="color:var(--muted);font-size:12px;">${fmtAmt(t.asset.amount,t.type)}</td>
     ${entryTds(t)}
     <td>${priceCell}</td>
-    <td style="font-size:13px;">${currentValueCell(t)}</td>
-    <td>${pnlCell(t)}</td>
+    <td style="font-size:13px;">${soldOut ? '<span class="neutral">sold</span>' : currentValueCell(t)}</td>
+    <td>${soldOut ? '<span class="neutral" title="This buy is fully sold — its result is in the position\'s realized P&amp;L above">—</span>' : pnlCell(t)}</td>
     <td><div class="trade-actions">${actions}</div></td>
   </tr>`;
 }
@@ -1814,7 +1814,7 @@ function positionHtml(i) {
 
   let detail = '';
   if (expanded) {
-    detail = g.buys.map(b => rowHtml(b, true)).join('')
+    detail = g.buys.map(b => rowHtml(b, true, m.remainingQty <= 0)).join('')
            + g.sells.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(s => sellRowHtml(s, m)).join('');
   }
   return summary + detail;
