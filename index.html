@@ -2103,7 +2103,7 @@ async function refreshPrices() {
   await refreshEthRate();                 // keeps NFT USD values current
   const nPrices = {};
   for (const t of S.trades) {
-    if (t.status === 'closed') continue;
+    if (t.status === 'closed' || t.kind === 'sell') continue;
     if (t.type === 'nft') {                       // auto floor price (in ETH) via OpenSea
       if (S.keys.opensea) { try { const f = await openseaFloor(t); if (f != null) t.priceLive = f; } catch {} }
       continue;
