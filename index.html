@@ -1230,6 +1230,24 @@ async function fetchEvm(chain, hash) {
   return { chain, hash, from:tx.from, valueEth, gasEth, ts, tokens, nfts, e1155 };
 }
 
+// Internal ETH transfers for a tx. Marketplace sale proceeds (Blur/Seaport/OpenSea)
+// are paid this way and never appear in the receipt logs or in tx.value. The free
+// RPCs we use block trace calls, so read them from the Etherscan-family API instead.
+// Etherscan V2 uses one host + chainid and a single Etherscan key works across
+// Ethereum, Base and Arbitrum. Returns [] if no key is set or the call fails.
+async function fetchInternalEth(chain, hash) {
+  const key = S.keys.eth || S.keys.base || S.keys.arb;
+  if (!key) return [];
+  const url = `https://api.etherscan.io/v2/api?chainid=${CHAINS[chain].chainid}`
+    + `&module=account&action=txlistinternal&txhash=${hash}&apikey=${key}`;
+  try {
+    const r = await fetch(url);
+    const d = await r.json();
+    if (d.status !== '1' || !Array.isArray(d.result)) return [];
+    return d.result.map(x => ({ from:x.from, to:x.to, value:x.value }));
+  } catch { return []; }
+}
+
 function parseEvm(d) {
   const { chain, from, valueEth, gasEth, ts, tokens, nfts, e1155 } = d;
   const date = ts ? new Date(ts*1000).toISOString() : new Date().toISOString();
@@ -2416,17 +2434,28 @@ async function fetchSellTx() {
         proceedsNoFee   = decVal(bestTok);
         proceedsWithFee = proceedsNoFee; // stablecoin/token; gas is in ETH separately
         ccy = bestTok.tokenSymbol;
-      } else if (valueEth > 0) {
-        // ETH received (e.g. selling on some DEXes that return ETH directly)
-        proceedsNoFee   = valueEth;
-        proceedsWithFee = valueEth - gasEth;
-        ccy = CHAINS[t.chain].ccy;
       } else {
-        // Soft fail: proceeds may arrive via internal txs — let Zul type them in.
-        if (detectedQty > 0) document.getElementById('sell-qty').value = detectedQty;
-        st.textContent = `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}, but the proceeds may have arrived via an internal transfer — enter the amount received below.`;
-        btn.disabled = false;
-        return;
+        // Plain-ETH proceeds (NFT sales on Blur/Seaport/OpenSea, some DEXes) arrive
+        // as an INTERNAL transfer to my wallet — invisible in logs and in tx.value
+        // (tx.value is the buyer's spend, not mine). Read internal transfers via the
+        // explorer API and sum only the ETH sent to one of my registered wallets.
+        const internals = await fetchInternalEth(t.chain, hash);
+        let ethIn = 0;
+        for (const x of internals) if (mine(x.to)) ethIn += Number(BigInt(x.value)) / 1e18;
+        if (ethIn > 0) {
+          proceedsNoFee   = ethIn;
+          proceedsWithFee = ethIn - gasEth;
+          ccy = CHAINS[t.chain].ccy;
+        } else {
+          // Soft fail: couldn't read the proceeds — let Zul type them in.
+          if (detectedQty > 0) document.getElementById('sell-qty').value = detectedQty;
+          const needKey = !(S.keys.eth || S.keys.base || S.keys.arb);
+          st.textContent = needKey
+            ? `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}. The ETH proceeds came via an internal transfer — add your Etherscan API key in Settings to read it automatically, or enter the amount received below.`
+            : `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}, but couldn't find ETH paid to your wallet — enter the amount received below.`;
+          btn.disabled = false;
+          return;
+        }
       }
     }
 
