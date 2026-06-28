@@ -168,6 +168,17 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .row-closed td { opacity: .65; }
 .closed-badge { display:inline-flex;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(136,136,136,.15);color:var(--muted);margin-left:5px; }
 
+/* "Closed Trades" section divider inside the table */
+.section-divider td {
+  padding: 18px 12px 8px; background: transparent;
+  font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.section-divider span {
+  margin-left: 6px; padding: 1px 7px; border-radius: 9px;
+  background: rgba(136,136,136,.18); color: var(--muted); font-size: 10px; letter-spacing: 0;
+}
+
 /* Grouped position rows — the blended "position" summary */
 .pos-row td { background: rgba(77,159,255,.06); border-top: 1px solid rgba(77,159,255,.25); }
 .pos-row:hover td { background: rgba(77,159,255,.09); }
@@ -1588,16 +1599,31 @@ function renderPortfolio() {
   table.style.display = ''; empty.style.display = 'none';
 
   // Group open buys (and their partial-sell records) by asset; legacy fully-closed
-  // trades from the old flow stay as individual rows at the bottom.
+  // trades from the old flow stay as individual rows.
   _groups = groupOpenAndSells(trades);
   const legacyClosed = trades.filter(t => t.status === 'closed' && t.kind !== 'sell');
 
-  let html = '';
+  // Split positions into still-open vs fully-exited (every unit sold) so the closed
+  // ones can be consolidated into a section at the bottom, after the open holdings.
+  const openIdx = [], closedIdx = [];
   _groups.forEach((g, i) => {
+    const fullyExited = g.sells.length && positionMetrics(g).remainingQty <= 0;
+    (fullyExited ? closedIdx : openIdx).push(i);
+  });
+
+  let html = '';
+  for (const i of openIdx) {
+    const g = _groups[i];
     const plain = g.buys.length === 1 && g.sells.length === 0;
     html += plain ? rowHtml(g.buys[0]) : positionHtml(i);
-  });
-  for (const t of legacyClosed) html += rowHtml(t);
+  }
+
+  if (closedIdx.length || legacyClosed.length) {
+    const n = closedIdx.length + legacyClosed.length;
+    html += `<tr class="section-divider"><td colspan="9">Closed Trades <span>${n}</span></td></tr>`;
+    for (const i of closedIdx) html += positionHtml(i);
+    for (const t of legacyClosed) html += rowHtml(t);
+  }
 
   body.innerHTML = html;
   renderStats(S.trades);
