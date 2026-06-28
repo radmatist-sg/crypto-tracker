@@ -1244,13 +1244,24 @@ async function fetchEvm(chain, hash) {
 // Internal ETH transfers for a tx. Marketplace sale proceeds (Blur/Seaport/OpenSea)
 // are paid this way and never appear in the receipt logs or in tx.value. The free
 // RPCs we use block trace calls, so read them from the Etherscan-family API instead.
-// Etherscan V2 uses one host + chainid and a single Etherscan key works across
-// Ethereum, Base and Arbitrum. Returns [] if no key is set or the call fails.
+// The V2 endpoint (api.etherscan.io) authenticates ONLY with an Etherscan key, but
+// that one key works for every chain via chainid. If the user saved only a chain-
+// specific key (BaseScan/Arbiscan), fall back to that chain's own V1 explorer — a
+// BaseScan key would be rejected by the Etherscan host. Returns [] if no usable key.
 async function fetchInternalEth(chain, hash) {
-  const key = S.keys.eth || S.keys.base || S.keys.arb;
-  if (!key) return [];
-  const url = `https://api.etherscan.io/v2/api?chainid=${CHAINS[chain].chainid}`
-    + `&module=account&action=txlistinternal&txhash=${hash}&apikey=${key}`;
+  const V1 = { ethereum:'https://api.etherscan.io/api',
+               base:'https://api.basescan.org/api',
+               arbitrum:'https://api.arbiscan.io/api' };
+  const chainKey = { ethereum:'eth', base:'base', arbitrum:'arb' }[chain];
+  const q = `module=account&action=txlistinternal&txhash=${hash}`;
+  let url;
+  if (S.keys.eth) {
+    url = `https://api.etherscan.io/v2/api?chainid=${CHAINS[chain].chainid}&${q}&apikey=${S.keys.eth}`;
+  } else if (chainKey && S.keys[chainKey] && V1[chain]) {
+    url = `${V1[chain]}?${q}&apikey=${S.keys[chainKey]}`;
+  } else {
+    return [];
+  }
   try {
     const r = await fetch(url);
     const d = await r.json();
@@ -1605,9 +1616,10 @@ function renderPortfolio() {
 
   // Split positions into still-open vs fully-exited (every unit sold) so the closed
   // ones can be consolidated into a section at the bottom, after the open holdings.
-  const openIdx = [], closedIdx = [];
+  const metrics = [], openIdx = [], closedIdx = [];
   _groups.forEach((g, i) => {
-    const fullyExited = g.sells.length && positionMetrics(g).remainingQty <= 0;
+    const m = metrics[i] = positionMetrics(g);
+    const fullyExited = g.sells.length && m.remainingQty <= 0;
     (fullyExited ? closedIdx : openIdx).push(i);
   });
 
@@ -1615,13 +1627,13 @@ function renderPortfolio() {
   for (const i of openIdx) {
     const g = _groups[i];
     const plain = g.buys.length === 1 && g.sells.length === 0;
-    html += plain ? rowHtml(g.buys[0]) : positionHtml(i);
+    html += plain ? rowHtml(g.buys[0]) : positionHtml(i, metrics[i]);
   }
 
   if (closedIdx.length || legacyClosed.length) {
     const n = closedIdx.length + legacyClosed.length;
     html += `<tr class="section-divider"><td colspan="9">Closed Trades <span>${n}</span></td></tr>`;
-    for (const i of closedIdx) html += positionHtml(i);
+    for (const i of closedIdx) html += positionHtml(i, metrics[i]);
     for (const t of legacyClosed) html += rowHtml(t);
   }
 
@@ -1759,9 +1771,9 @@ function rowHtml(t, isLot=false, soldOut=false) {
 
 // Summary row for an asset bought across several transactions: blended average
 // cost + combined value/P&L, with a caret to expand the individual buys below.
-function positionHtml(i) {
+function positionHtml(i, m) {
   const g = _groups[i];
-  const m = positionMetrics(g);
+  m = m || positionMetrics(g);
   const t0 = m.t0, count = m.count, isNft = m.isNft;
   const ch = CHAINS[t0.chain] || { name:t0.chain, color:'#888' };
   const expanded = expandedGroups.has(g.key);
