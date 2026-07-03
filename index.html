@@ -1366,7 +1366,37 @@ async function fetchSolana(sig) {
   return { sig, chain:'solana', tx:d.result };
 }
 
-function parseSolana(d) {
+// ─── MAGIC EDEN POOL-BID (MMM) + METAPLEX CORE NFT ─────────
+// These trades are invisible to the normal parser: the NFT is a Metaplex "Core" asset
+// (no SPL token-account change to read), and payment flows through the ME bid escrow
+// (not straight from your wallet). This reads the price from the mmm program log and the
+// asset + new owner from the Core Transfer instruction. Returns null if not an MMM tx.
+const MMM_PROG = 'mmm3XBJg5gk8XJxEKBvdgptZz6SgK4tXvn36sodowMc';
+const MPL_CORE = 'CoREENxT6tW1HoK8ypY1SxRMZTcVPm7R94rH4PZNhX7d';
+function parseMagicEdenMMM(tx) {
+  const logs = (tx.meta && tx.meta.logMessages) || [];
+  if (!logs.some(l => l.startsWith(`Program ${MMM_PROG} invoke`))) return null;
+  let totalPrice = null, royalty = 0, lpFee = 0;
+  for (const l of logs) {                                   // price JSON lives in a Program log line
+    const i = l.indexOf('{"lp_fee"');
+    if (i >= 0) { try { const j = JSON.parse(l.slice(i));
+      totalPrice = (j.total_price||0)/1e9; royalty = (j.royalty_paid||0)/1e9; lpFee = (j.lp_fee||0)/1e9; } catch {} }
+  }
+  let asset = null, collection = null, newOwner = null;     // from the MPL Core Transfer
+  const scan = ix => {
+    if (ix.programId === MPL_CORE && Array.isArray(ix.accounts) && ix.accounts.length >= 1) {
+      asset = ix.accounts[0];                               // MPL Core: acct[0]=asset, [1]=collection, [4]=new owner
+      if (ix.accounts.length >= 2 && ix.accounts[1] !== MPL_CORE) collection = ix.accounts[1];
+      if (ix.accounts.length >= 5) newOwner = ix.accounts[4];
+    }
+  };
+  ((tx.meta && tx.meta.innerInstructions) || []).forEach(g => g.instructions.forEach(scan));
+  ((tx.transaction.message.instructions) || []).forEach(scan);
+  if (!asset) return null;
+  return { totalPrice, royalty, lpFee, asset, collection, newOwner };
+}
+
+async function parseSolana(d) {
   const { sig, tx } = d;
   const meta = tx.meta;
   const date = tx.blockTime ? new Date(tx.blockTime*1000).toISOString() : new Date().toISOString();
@@ -1385,6 +1415,19 @@ function parseSolana(d) {
   keys.forEach((k,i) => { if (mine(k)) myIdx.add(i); });
   let solChange = 0;
   myIdx.forEach(i => { solChange += ((preB[i]||0) - (postB[i]||0)) / 1e9; }); // positive = spent
+
+  // Magic Eden pool-bid buy of a Core NFT: read the price + asset directly. The normal SPL
+  // logic can't see it (Core = no token account; funds came from the ME bid escrow, not my wallet).
+  const me = parseMagicEdenMMM(tx);
+  if (me && me.asset && me.newOwner && isMyWallet(me.newOwner, 'solana')) {
+    const price = me.totalPrice != null ? me.totalPrice : Math.max(0, solChange - fee);
+    let name = 'Unknown NFT', symbol = 'NFT';
+    try { const rr = await meProxy(`tokens/${me.asset}`);
+      if (rr.ok) { const j = await rr.json(); if (j.name) name = j.name; if (j.collection) symbol = j.collection; } } catch {}
+    return { type:'nft', name, symbol, contract:me.asset, tokenId:null, amount:1,
+      noFee:price, fee, withFee:price, ccy:'SOL', feeCcy:'SOL', date,
+      note:`Magic Eden pool-bid buy — ${fmt(price,4)} SOL${symbol!=='NFT'?` · ${symbol}`:''}` };
+  }
 
   const preTok  = meta.preTokenBalances  || [];
   const postTok = meta.postTokenBalances || [];
@@ -1464,7 +1507,7 @@ async function fetchTx() {
     let p;
     if (chain === 'solana') {
       const d = await fetchSolana(hash);
-      p = parseSolana(d);
+      p = await parseSolana(d);
     } else {
       const d = await fetchEvm(chain, hash);
       p = parseEvm(d);
@@ -2450,6 +2493,13 @@ async function fetchSellTx() {
           }
         }
         detectedQty = Math.max(0, sold);
+      }
+
+      // Magic Eden pool-bid sale of a Core NFT: no SPL token-balance change to read the qty
+      // from. If this is that kind of tx and the asset matches what I'm selling, it's 1 NFT.
+      if (detectedQty <= 1e-9) {
+        const meSale = parseMagicEdenMMM(d.tx);
+        if (meSale && meSale.asset && (!t.asset.contract || meSale.asset === t.asset.contract)) detectedQty = 1;
       }
 
       // Net change of every mint across my wallets → positive deltas are what I received.
