@@ -1,0 +1,4 @@
+project_id = "ecybxggndoqmumxagtoe"
+
+[functions.me-proxy]
+verify_jwt = true

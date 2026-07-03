@@ -790,7 +790,7 @@ const STABLECOINS = new Set(['USDC','USDT','DAI','BUSD','FRAX','USDS']);
 function isStable(ccy) { return STABLECOINS.has(ccy); }
 
 // ─── STATE ─────────────────────────────────────────────────
-let S = { trades:[], wallets:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0,
+let S = { trades:[], wallets:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0, solUsd:0,
   sync:{url:'',key:'',code:''}, updatedAt:0, tombstones:{},
   stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 },     // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
   acctNames:{}, stockFilter:'all',                            // custom portfolio labels per broker; current stocks filter (runtime)
@@ -870,7 +870,7 @@ function positionMetrics(g) {
   const livePrice = priceLot ? priceLot.priceLive : null;
   let openValueUsd = null, openValueEth = null;
   if (livePrice !== null) {
-    if (isNft) { openValueEth = livePrice*remainingQty; openValueUsd = openValueEth*(S.ethUsd||0); }
+    if (isNft) { openValueEth = livePrice*remainingQty; openValueUsd = openValueEth*ccyUsd(buys[0] && CHAINS[buys[0].chain] ? CHAINS[buys[0].chain].ccy : 'ETH'); }
     else openValueUsd = livePrice*remainingQty;
   }
   const unrealizedUsd = openValueUsd != null ? openValueUsd - remainingCostUsd : null;
@@ -887,6 +887,7 @@ function loadState() {
     if (d.keys) S.keys = { ...S.keys, ...d.keys };
     if (Array.isArray(d.wallets)) S.wallets = d.wallets;
     if (d.ethUsd) S.ethUsd = d.ethUsd;   // last known ETH price, for instant NFT USD display
+    if (d.solUsd) S.solUsd = d.solUsd;   // last known SOL price, for Solana NFT USD display
     if (d.sync) S.sync = { ...S.sync, ...d.sync };
     if (d.updatedAt) S.updatedAt = d.updatedAt;
     if (d.stocks) S.stocks = d.stocks;
@@ -910,7 +911,7 @@ function loadState() {
 }
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
-  localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, wallets: S.wallets, keys: S.keys, ethUsd: S.ethUsd, sync: S.sync, updatedAt: S.updatedAt,
+  localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, wallets: S.wallets, keys: S.keys, ethUsd: S.ethUsd, solUsd: S.solUsd, sync: S.sync, updatedAt: S.updatedAt,
     stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view, tombstones: S.tombstones }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
@@ -981,7 +982,7 @@ async function pullRemote() {
 }
 async function pushRemote() {
   const { error } = await sb.from('portfolios').upsert(
-    { user_id: _user.id, data: { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, updatedAt:S.updatedAt,
+    { user_id: _user.id, data: { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, solUsd:S.solUsd, updatedAt:S.updatedAt,
         stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, tombstones:S.tombstones }, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' });
   if (error) throw error;
@@ -1029,6 +1030,7 @@ async function doPull(announce) {
       if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
       if (Array.isArray(remote.wallets)) S.wallets = remote.wallets;
       if (remote.ethUsd) S.ethUsd = remote.ethUsd;
+      if (remote.solUsd) S.solUsd = remote.solUsd;
       if (remote.baseCcy) S.baseCcy = remote.baseCcy;
       if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
       if (remote.acctNames) S.acctNames = remote.acctNames;
@@ -1650,14 +1652,14 @@ function currentValueCell(t) {
   if (t.status === 'closed') {
     if (t.type === 'nft') {
       const xe = exitEth(t), xu = t.exit?.proceedsUsd ?? null;
-      if (xe !== null) return `<span style="color:var(--muted);">${fmt(xe,4)} ETH${usdSub(xu)}</span>`;
+      if (xe !== null) return `<span style="color:var(--muted);">${fmt(xe,4)} ${natCcy(t)}${usdSub(xu)}</span>`;
       return xu !== null ? `<span style="color:var(--muted);">$${fmt(xu,2)}</span>` : '<span class="neutral">—</span>';
     }
     const v = t.exit?.proceedsUsd ?? null;
     return v !== null ? `<span style="color:var(--muted);">$${fmt(v,2)}</span>` : '<span class="neutral">—</span>';
   }
   if (t.priceLive === null) return '<span class="neutral">—</span>';
-  if (t.type === 'nft') return `${fmt(liveValueEth(t),4)} ETH${usdSub(liveValueUsd(t)||null)}`;
+  if (t.type === 'nft') return `${fmt(liveValueEth(t),4)} ${natCcy(t)}${usdSub(liveValueUsd(t)||null)}`;
   return `$${fmt(liveValueUsd(t), 2)}`;
 }
 
@@ -1678,7 +1680,7 @@ function pnlCell(t) {
     if (ethPnl !== null) {
       const es = ethPnl>=0?'+':'-', ecls = ethPnl>=0?'positive':'negative';
       const sec = usdPnl!=null ? ` <span style="color:var(--muted);font-size:11px;">${usdPnl>=0?'+':'-'}$${fmt(Math.abs(usdPnl),2)}</span>` : '';
-      return `<span class="${ecls}">${es}${fmt(Math.abs(ethPnl),4)} ETH</span>${sec}`;
+      return `<span class="${ecls}">${es}${fmt(Math.abs(ethPnl),4)} ${natCcy(t)}</span>${sec}`;
     }
     const us = usdPnl>=0?'+':'-', ucls = usdPnl>=0?'positive':'negative';
     return `<span class="${ucls}">${us}$${fmt(Math.abs(usdPnl),2)}</span>`;
@@ -1725,13 +1727,13 @@ function rowHtml(t, isLot=false, soldOut=false) {
     const saleUsd = t.exit?.proceedsUsd ?? null;
     const xe = exitEth(t);
     priceCell = (t.type==='nft' && xe !== null)
-      ? `<span style="color:var(--muted);font-size:12px;">sold ${fmt(xe,4)} ETH${saleUsd!=null?` <span style="font-size:11px;">$${fmt(saleUsd,2)}</span>`:''}</span>`
+      ? `<span style="color:var(--muted);font-size:12px;">sold ${fmt(xe,4)} ${natCcy(t)}${saleUsd!=null?` <span style="font-size:11px;">$${fmt(saleUsd,2)}</span>`:''}</span>`
       : saleUsd !== null
         ? `<span style="color:var(--muted);font-size:12px;">sold $${fmt(saleUsd,2)}</span>`
         : '<span class="neutral">—</span>';
   } else if (t.priceLive !== null) {
     const disp = t.type==='nft'
-      ? `${fmt(t.priceLive,4)} ETH${S.ethUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(t.priceLive*S.ethUsd,2)}</span>`:''}`
+      ? `${fmt(t.priceLive,4)} ${natCcy(t)}${natRate(t)?` <span style="color:var(--muted);font-size:11px;">$${fmt(t.priceLive*natRate(t),2)}</span>`:''}`
       : `$${fmt(t.priceLive, t.priceLive < 0.001 ? 8 : 4)}`;
     priceCell = `<span class="price-cell" onclick="editPrice('${t.id}')" title="Click to edit price">${disp}</span>`
       + ` <button onclick="clearPrice('${t.id}')" title="Clear price" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px;line-height:1;vertical-align:middle;">×</button>`;
@@ -1807,7 +1809,7 @@ function positionHtml(i, m) {
   let priceCell;
   if (m.livePrice !== null) {
     const disp = isNft
-      ? `${fmt(m.livePrice,4)} ETH${S.ethUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(m.livePrice*S.ethUsd,2)}</span>`:''}`
+      ? `${fmt(m.livePrice,4)} ${natCcy(t0)}${natRate(t0)?` <span style="color:var(--muted);font-size:11px;">$${fmt(m.livePrice*natRate(t0),2)}</span>`:''}`
       : `$${fmt(m.livePrice, m.livePrice<0.001?8:4)}`;
     priceCell = `<span class="price-cell" onclick="editPrice('${t0.id}')" title="Click to edit — applies to all buys">${disp}</span>`
       + ` <button onclick="clearPrice('${t0.id}')" title="Clear price" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0 2px;line-height:1;vertical-align:middle;">×</button>`;
@@ -1827,12 +1829,12 @@ function positionHtml(i, m) {
     pnlHtml = partial ? `<span class="neutral">—</span>${realizedSub}` : '<span class="neutral">—</span>';
   } else if (isNft) {
     const valUsd = m.openValueUsd;
-    valueCell = `${fmt(m.openValueEth,4)} ETH${valUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(valUsd,2)}</span>`:''}`;
+    valueCell = `${fmt(m.openValueEth,4)} ${natCcy(t0)}${valUsd?` <span style="color:var(--muted);font-size:11px;">$${fmt(valUsd,2)}</span>`:''}`;
     const avgWithEth = m.totWith/m.totalBought;
     const ethPnl = m.openValueEth - avgWithEth*m.remainingQty;
     const es = ethPnl>=0?'+':'-', ecls = ethPnl>=0?'positive':'negative';
     const usdSubTxt = m.unrealizedUsd!=null?` <span style="color:var(--muted);font-size:11px;">${m.unrealizedUsd>=0?'+':'-'}$${fmt(Math.abs(m.unrealizedUsd),2)}</span>`:'';
-    pnlHtml = `<span class="${ecls}">${es}${fmt(Math.abs(ethPnl),4)} ETH</span>${usdSubTxt}${realizedSub}`;
+    pnlHtml = `<span class="${ecls}">${es}${fmt(Math.abs(ethPnl),4)} ${natCcy(t0)}</span>${usdSubTxt}${realizedSub}`;
   } else {
     valueCell = `$${fmt(m.openValueUsd,2)}`;
     const pnl = m.unrealizedUsd, pct = m.remainingCostUsd ? pnl/m.remainingCostUsd*100 : null;
@@ -1917,13 +1919,15 @@ async function refreshGroup(i) {
   const lots = g.buys, t0 = lots[0];
   _rateLimited = false;
   if (t0.type === 'nft') {
-    if (!S.keys.opensea) { toast('Add your OpenSea API key in Settings to auto-fetch NFT floors.'); return; }
+    const isSol = t0.chain === 'solana';
+    if (!isSol && !S.keys.opensea) { toast('Add your OpenSea API key in Settings to auto-fetch NFT floors.'); return; }
+    if (isSol && !t0.asset.contract) { toast('Add the NFT mint address (edit the trade) so Magic Eden can find the collection.'); return; }
     toast('Fetching floor price…');
     try {
-      await refreshEthRate();
-      const floor = await openseaFloor(t0);
+      await (isSol ? refreshSolRate() : refreshEthRate());
+      const floor = await nftFloor(t0);
       if (floor != null) { lots.forEach(l => l.priceLive = floor); persist(); renderPortfolio(); toast(`${t0.asset.name} floor updated ✓`); }
-      else toast(_rateLimited ? 'Rate limited — wait ~30s and try again.' : 'Floor not found on OpenSea — set it manually.');
+      else toast(_rateLimited ? 'Rate limited — wait ~30s and try again.' : `Floor not found on ${isSol?'Magic Eden':'OpenSea'} — set it manually.`);
     } catch(e) { toast(e.message); }
     return;
   }
@@ -1942,20 +1946,25 @@ function entryUsd(t) {
   // nativeUsd = 1 for stablecoins, native-token price at purchase otherwise
   return t.entry.withFee * (t.entry.nativeUsd || 0);
 }
-function entryEth(t) { return t.entry.withFee; }          // meaningful for NFTs (ETH-priced)
+function entryEth(t) { return t.entry.withFee; }          // meaningful for NFTs (native-priced)
+
+// Native currency of an NFT/trade: SOL on Solana, ETH on EVM chains.
+function natCcy(t)  { return (t && CHAINS[t.chain] && CHAINS[t.chain].ccy) || (t && t.entry && t.entry.ccy) || 'ETH'; }
+function ccyUsd(ccy){ return /^W?SOL$/i.test(ccy) ? (S.solUsd || 0) : (S.ethUsd || 0); }  // live USD rate for that native token
+function natRate(t) { return ccyUsd(natCcy(t)); }
 
 function liveValueUsd(t) {
   if (t.priceLive === null) return null;
-  if (t.type === 'nft') return t.priceLive * (S.ethUsd || 0);  // priceLive in ETH → USD
+  if (t.type === 'nft') return t.priceLive * natRate(t);        // priceLive in native token → USD
   return t.priceLive * t.asset.amount;                          // coin priceLive already USD
 }
 function liveValueEth(t) {
   if (t.type !== 'nft' || t.priceLive === null) return null;
   return t.priceLive;                                           // floor in ETH per NFT
 }
-function exitEth(t) {                                           // ETH proceeds of a sold NFT
+function exitEth(t) {                                           // native (ETH/SOL) proceeds of a sold NFT
   if (t.type !== 'nft' || !t.exit) return null;
-  return /^W?ETH$/i.test(t.exit.ccy || '') ? t.exit.proceeds : null;
+  return /^W?(ETH|SOL)$/i.test(t.exit.ccy || '') ? t.exit.proceeds : null;
 }
 
 function calcPnl(t) {                                           // always USD
@@ -2075,6 +2084,49 @@ async function refreshEthRate() {
   return S.ethUsd;
 }
 
+// Live SOL/USD rate, used to convert Solana NFT floors (in SOL) into USD.
+async function refreshSolRate() {
+  const p = await nativePrice('solana');
+  if (p) { S.solUsd = p; persist(); }
+  return S.solUsd;
+}
+
+// ─── MAGIC EDEN SOLANA NFT FLOOR PRICE ─────────────────────
+// Magic Eden's API sends no CORS header + is bot-protected, so the browser can't call
+// it directly. We go through our Supabase Edge Function (me-proxy), which adds CORS and
+// (optionally) the private API key server-side. Returns the floor price in SOL, or null.
+function meProxy(path) {
+  return apiGet(`${SB_URL}/functions/v1/me-proxy?path=${encodeURIComponent(path)}`,
+    { headers: { 'Authorization': `Bearer ${SB_ANON}`, 'apikey': SB_ANON } });
+}
+async function magicEdenFloor(t) {
+  if (t.chain !== 'solana' || !t.asset.contract) return null;
+  // Resolve the NFT mint → Magic Eden collection symbol (cached once on the asset).
+  let sym = t.asset.meSymbol;
+  if (!sym) {
+    const r = await meProxy(`tokens/${t.asset.contract}`);
+    if (!r.ok) return null;
+    sym = (await r.json())?.collection;
+    if (sym) t.asset.meSymbol = sym;
+  }
+  if (!sym) return null;
+  // Cache the collection image once (letter-badge fallback handles misses).
+  const ck = (t.asset.contract || '').toLowerCase();
+  if (ck && !S.assetImg[ck]) {
+    try { const cr = await meProxy(`collections/${sym}`);
+      if (cr.ok) { const im = (await cr.json())?.image; if (im) S.assetImg[ck] = im; } } catch {}
+  }
+  const sr = await meProxy(`collections/${sym}/stats`);
+  if (!sr.ok) return null;
+  const lamports = (await sr.json())?.floorPrice;
+  return lamports != null ? Number(lamports) / 1e9 : null;   // lamports → SOL
+}
+
+// Fetch the live NFT floor for a trade, routing by chain (Solana→Magic Eden, EVM→OpenSea).
+async function nftFloor(t) {
+  return t.chain === 'solana' ? magicEdenFloor(t) : openseaFloor(t);
+}
+
 // ─── OPENSEA NFT FLOOR PRICE ───────────────────────────────
 const OS_CHAIN = { ethereum:'ethereum', base:'base', arbitrum:'arbitrum' };
 // Returns the live collection floor price in ETH, or null if unavailable.
@@ -2156,12 +2208,14 @@ async function tokenPrice(chain, contract) {
 async function refreshPrices() {
   _rateLimited = false;
   toast('Refreshing prices…');
-  await refreshEthRate();                 // keeps NFT USD values current
+  await refreshEthRate();                 // keeps EVM NFT USD values current
+  await refreshSolRate();                 // keeps Solana NFT USD values current
   const nPrices = {};
   for (const t of S.trades) {
     if (t.status === 'closed' || t.kind === 'sell') continue;
-    if (t.type === 'nft') {                       // auto floor price (in ETH) via OpenSea
-      if (S.keys.opensea) { try { const f = await openseaFloor(t); if (f != null) t.priceLive = f; } catch {} }
+    if (t.type === 'nft') {                       // auto floor: Solana→Magic Eden, EVM→OpenSea
+      if (t.chain === 'solana') { try { const f = await magicEdenFloor(t); if (f != null) t.priceLive = f; } catch {} }
+      else if (S.keys.opensea)  { try { const f = await openseaFloor(t);  if (f != null) t.priceLive = f; } catch {} }
       continue;
     }
     if (!nPrices[t.chain]) nPrices[t.chain] = await nativePrice(t.chain);
@@ -2182,20 +2236,23 @@ async function refreshOne(id) {
   const t = S.trades.find(x => x.id===id);
   if (!t) return;
   _rateLimited = false;
-  if (t.type === 'nft') {                          // live floor price (ETH) from OpenSea
-    if (!S.keys.opensea) { toast('Add your OpenSea API key in Settings to auto-fetch NFT floors.'); return; }
+  if (t.type === 'nft') {                          // live floor: Solana→Magic Eden, EVM→OpenSea
+    const isSol = t.chain === 'solana';
+    if (!isSol && !S.keys.opensea) { toast('Add your OpenSea API key in Settings to auto-fetch NFT floors.'); return; }
+    if (isSol && !t.asset.contract) { toast('Add the NFT mint address (edit the trade) so Magic Eden can find the collection.'); return; }
     toast('Fetching floor price…');
     try {
-      await refreshEthRate();
-      const floor = await openseaFloor(t);
+      await (isSol ? refreshSolRate() : refreshEthRate());
+      const floor = await nftFloor(t);
       if (floor != null) {
         t.priceLive = floor; syncGroupPrice(t); persist(); renderPortfolio();
-        const usd = S.ethUsd ? ` (≈ $${fmt(floor*S.ethUsd,2)})` : '';
-        toast(`${t.asset.name} floor: ${fmt(floor,4)} ETH${usd} ✓`);
+        const rate = natRate(t);
+        const usd = rate ? ` (≈ $${fmt(floor*rate,2)})` : '';
+        toast(`${t.asset.name} floor: ${fmt(floor,4)} ${natCcy(t)}${usd} ✓`);
       } else {
         toast(_rateLimited
           ? 'Price service rate limited — wait ~30s and try ↻ again.'
-          : 'Floor not found on OpenSea — set the price manually instead.');
+          : `Floor not found on ${isSol?'Magic Eden':'OpenSea'} — set the price manually instead.`);
       }
     } catch(e) { toast(e.message); }
     return;
@@ -2223,29 +2280,31 @@ async function editPrice(id) {
   if (!t || t.status==='closed') return;
   const isNft = t.type === 'nft';
   const current = t.priceLive !== null ? t.priceLive : '';
+  const nc = natCcy(t);                                  // SOL on Solana, ETH on EVM
   const label = isNft
-    ? `Set current floor price for ${t.asset.name}.\nEnter ETH (e.g. 0.3) — or USD with a $ (e.g. $1200):`
+    ? `Set current floor price for ${t.asset.name}.\nEnter ${nc} (e.g. 0.3) — or USD with a $ (e.g. $1200):`
     : `Set current price for ${t.asset.name} (USD per token):`;
   const raw = prompt(`${label}\n\nLeave blank and click OK to clear the price.`, current);
   if (raw === null) return; // user hit Cancel
   if (raw.trim() === '') { clearPrice(id); return; }
 
   if (isNft) {
-    if (!S.ethUsd) await refreshEthRate();              // need live ETH rate for conversion
+    if (!natRate(t)) await (t.chain==='solana' ? refreshSolRate() : refreshEthRate());  // need live rate for USD conversion
+    const rate = natRate(t);
     const usdMode = raw.trim().startsWith('$');
     const num = parseFloat(raw.replace(/[$,\s]/g,''));
     if (isNaN(num) || num < 0) { toast('Enter a valid number.'); return; }
     if (usdMode) {
-      if (!S.ethUsd) { toast('Live ETH price unavailable — enter the price in ETH instead.'); return; }
-      t.priceLive = num / S.ethUsd;                      // USD → ETH (stored in ETH)
+      if (!rate) { toast(`Live ${nc} price unavailable — enter the price in ${nc} instead.`); return; }
+      t.priceLive = num / rate;                           // USD → native (stored in SOL/ETH)
     } else {
-      t.priceLive = num;                                 // ETH directly
+      t.priceLive = num;                                  // native directly
     }
-    // entry.nativeUsd already holds the ETH price at purchase — leave it.
+    // entry.nativeUsd already holds the native token price at purchase — leave it.
     syncGroupPrice(t); touch(t);
     persist(); renderPortfolio();
-    const usd = S.ethUsd ? ` (≈ $${fmt(t.priceLive*S.ethUsd,2)})` : '';
-    toast(`${t.asset.name} floor set to ${fmt(t.priceLive,4)} ETH${usd} ✓`);
+    const usd = rate ? ` (≈ $${fmt(t.priceLive*rate,2)})` : '';
+    toast(`${t.asset.name} floor set to ${fmt(t.priceLive,4)} ${nc}${usd} ✓`);
     return;
   }
 
@@ -2674,7 +2733,7 @@ async function testJupiter() {
 
 // ─── DATA ──────────────────────────────────────────────────
 function exportData() {
-  const payload = { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, stocks:S.stocks, stockPx:S.stockPx,
+  const payload = { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, solUsd:S.solUsd, stocks:S.stocks, stockPx:S.stockPx,
     baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg };
   const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
   const a = Object.assign(document.createElement('a'),{
@@ -2693,6 +2752,7 @@ function importData(e) {
       if (Array.isArray(d.wallets)) S.wallets = d.wallets;
       if (d.keys)    S.keys = { ...S.keys, ...d.keys };
       if (d.ethUsd)  S.ethUsd = d.ethUsd;
+      if (d.solUsd)  S.solUsd = d.solUsd;
       if (d.stocks)  S.stocks = d.stocks;
       if (d.stockPx) S.stockPx = d.stockPx;
       if (d.baseCcy) S.baseCcy = d.baseCcy;
