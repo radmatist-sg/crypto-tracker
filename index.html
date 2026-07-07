@@ -811,6 +811,7 @@ function haveWallets() { return myWalletAddrs().length > 0; }
 
 // Grouping: multiple buys of the same asset are merged into one position row.
 let expandedGroups = new Set();   // which group keys are expanded to show individual buys
+let stockExpanded = new Set();    // which stock group keys are expanded to show buys & sells
 let _groups = [];                 // current render's [{key, lots}] — indexed by row handlers
 function groupKey(t) {
   const id = (t.asset.contract || t.asset.name || '').toLowerCase();
@@ -820,6 +821,10 @@ function toggleGroup(i) {
   const g = _groups[i]; if (!g) return;
   if (expandedGroups.has(g.key)) expandedGroups.delete(g.key); else expandedGroups.add(g.key);
   renderPortfolio();
+}
+function toggleStockGroup(key) {
+  if (stockExpanded.has(key)) stockExpanded.delete(key); else stockExpanded.add(key);
+  renderStocks();
 }
 // Keep every open buy of the same asset on the same live price.
 function syncGroupPrice(t) {
@@ -3095,7 +3100,7 @@ function stockGroups() {
     if (e.kind==='deposit' || e.kind==='withdraw' || e.kind==='interest' || e.kind==='fee') continue;
     if (e.kind==='dividend' && !e.ticker) continue;
     const tk=(e.ticker||'').toUpperCase(), broker=e.broker||'other', key=broker+'|'+tk+'|'+(e.ccy||'USD');
-    if (!map.has(key)) map.set(key, { ticker:tk, broker, ccy:e.ccy||'USD', name:e.name||'', buys:[], sells:[], divs:[] });
+    if (!map.has(key)) map.set(key, { key, ticker:tk, broker, ccy:e.ccy||'USD', name:e.name||'', buys:[], sells:[], divs:[] });
     const g=map.get(key);
     if (e.name && !g.name) g.name=e.name;
     if (e.kind==='sell') g.sells.push(e); else if (e.kind==='dividend') g.divs.push(e); else g.buys.push(e);
@@ -3207,7 +3212,7 @@ function stockRowHtml(g) {
   const sym=ccySym(g.ccy);
   const closed = g.remainingQty<=0;
   const sharesCell = (closed?'<span class="neutral">closed</span>':fmt(g.remainingQty, g.remainingQty%1?4:0))
-    + (g.soldQty>0 && !closed ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmt(g.soldQty,0)} of ${fmt(g.totalBought,0)}</span>`:'');
+    + (g.soldQty>0 && !closed ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmt(g.soldQty, g.soldQty%1?4:0)} of ${fmt(g.totalBought, g.totalBought%1?4:0)}</span>`:'');
   let priceCell;
   if (g.px!=null) priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')">${sym}${fmt(g.px,2)}</span>`;
   else priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')" style="color:var(--muted);font-size:11px;">click / refresh</span>`;
@@ -3235,16 +3240,21 @@ function stockRowHtml(g) {
     : `<button class="action-btn" title="Sell" onclick="prefillSell('${g.ticker}','${g.ccy}','${g.broker}')">Sell</button>
        <button class="action-btn" title="Refresh price" onclick="refreshStockPrices()">↻</button>
        <button class="action-btn del" title="Remove" onclick="delStock('${g.broker}','${g.ticker}')">×</button>`;
-  return `<tr class="${closed?'row-closed':''}">
-    <td>
-      <div class="asset-cell">
+  // Expandable when there's a breakdown worth seeing: any sells, or more than one buy lot.
+  const expandable = (g.sells.length>0) || (g.buys.length>1);
+  const expanded = expandable && stockExpanded.has(g.key);
+  const caret = !expandable ? '' : `<span class="pos-caret">${expanded?'▾':'▸'}</span>`;
+  const assetInner = `${caret}
         ${iconHtml('https://assets.parqet.com/logos/symbol/'+encodeURIComponent(g.ticker)+'?format=png', g.ticker, 'var(--blue)')}
         <div>
           <div class="asset-name">${esc(g.ticker)}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
-          <div class="asset-sub">${esc(g.name||'')} · ${esc(acctLabel(g.broker))}</div>
-        </div>
-      </div>
-    </td>
+          <div class="asset-sub">${esc(g.name||'')} · ${esc(acctLabel(g.broker))}${expandable?` · ${expanded?'hide':'show'} buys & sells`:''}</div>
+        </div>`;
+  const assetCell = expandable
+    ? `<div class="asset-cell pos-toggle" onclick="toggleStockGroup('${g.key}')" title="${expanded?'Hide':'Show'} buys & sells">${assetInner}</div>`
+    : `<div class="asset-cell">${assetInner}</div>`;
+  const summary = `<tr class="${closed?'row-closed':''}${expandable?' pos-row':''}">
+    <td>${assetCell}</td>
     <td style="font-size:12px;">${sharesCell}</td>
     <td style="font-size:12px;color:var(--muted);">${sym}${fmt(g.avgCost,2)}</td>
     <td>${priceCell}</td>
@@ -3252,6 +3262,60 @@ function stockRowHtml(g) {
     <td>${pnlCellH}</td>
     <td><div class="trade-actions">${actions}</div></td>
   </tr>`;
+  let detail = '';
+  if (expanded) detail = stockDetailRows(g, sym);
+  return summary + detail;
+}
+// Individual buy lots + sells + remaining line shown when a stock position is expanded.
+function stockDetailRows(g, sym) {
+  const rows = [];
+  const buys = g.buys.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
+  for (const b of buys) {
+    const sh=_sn(b.shares), pr=_sn(b.price), fee=_sn(b.fees), cost=sh*pr+fee;
+    rows.push(`<tr class="lot-row">
+      <td><div class="asset-cell"><div class="asset-icon" style="color:var(--blue)">BUY</div><div>
+        <div class="asset-name"><span class="lot-prefix" style="color:var(--blue)">↳</span>Bought ${fmt(sh, sh%1?4:0)}</div>
+        <div class="asset-sub">${fmtDate(b.date)}${fee?` · fee ${sym}${fmt(fee,2)}`:''}</div></div></div></td>
+      <td style="color:var(--muted);font-size:12px;">${fmt(sh, sh%1?4:0)}</td>
+      <td style="font-size:12px;">@ ${sym}${fmt(pr,2)}</td>
+      <td><span class="neutral">—</span></td>
+      <td style="font-size:12px;color:var(--muted);">${sym}${fmt(cost,2)}</td>
+      <td><span class="neutral">—</span></td>
+      <td></td>
+    </tr>`);
+  }
+  const sells = g.sells.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
+  for (const s of sells) {
+    const sh=_sn(s.shares), pr=_sn(s.price), fee=_sn(s.fees);
+    const proceeds=sh*pr-fee, basis=g.avgCost*sh, realized=proceeds-basis;
+    const pct = basis ? realized/basis*100 : null;
+    const rcls = realized>=0?'positive':'negative', rsgn = realized>=0?'+':'-';
+    rows.push(`<tr class="lot-row sell-row">
+      <td><div class="asset-cell"><div class="asset-icon" style="color:var(--red)">SLD</div><div>
+        <div class="asset-name"><span class="lot-prefix" style="color:var(--red)">↳</span>Sold ${fmt(sh, sh%1?4:0)}</div>
+        <div class="asset-sub">${fmtDate(s.date)}${fee?` · fee ${sym}${fmt(fee,2)}`:''}</div></div></div></td>
+      <td style="color:var(--muted);font-size:12px;">${fmt(sh, sh%1?4:0)}</td>
+      <td style="font-size:12px;">@ ${sym}${fmt(pr,2)}</td>
+      <td><span class="sold-badge">SELL</span></td>
+      <td style="font-size:12px;">${sym}${fmt(proceeds,2)}</td>
+      <td><span class="${rcls}">${rsgn}${sym}${fmt(Math.abs(realized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${realized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}</td>
+      <td></td>
+    </tr>`);
+  }
+  if (g.remainingQty>0 && g.sells.length>0) {
+    rows.push(`<tr class="lot-row">
+      <td><div class="asset-cell"><div class="asset-icon" style="color:var(--muted)">=</div><div>
+        <div class="asset-name" style="color:var(--text)"><span class="lot-prefix" style="color:var(--muted)">=</span>Remaining</div>
+        <div class="asset-sub">still held</div></div></div></td>
+      <td style="font-size:12px;">${fmt(g.remainingQty, g.remainingQty%1?4:0)}</td>
+      <td style="font-size:12px;color:var(--muted);">${sym}${fmt(g.avgCost,2)}</td>
+      <td><span class="neutral">—</span></td>
+      <td style="font-size:12px;color:var(--muted);">${sym}${fmt(g.remainingCost,2)} cost</td>
+      <td><span class="neutral">—</span></td>
+      <td></td>
+    </tr>`);
+  }
+  return rows.join('');
 }
 
 // ─── INIT ──────────────────────────────────────────────────
