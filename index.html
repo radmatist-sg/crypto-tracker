@@ -3034,7 +3034,7 @@ function editStockPrice(tk) {
   S.stockPx[tk] = { price:p, ts:Date.now() }; persist(); renderStocks();
 }
 function prefillSell(tk, ccy, broker) {
-  switchTab('stocks');
+  switchTab('stocks-add');
   document.getElementById('st-type').value='sell'; updateStockForm();
   document.getElementById('st-ticker').value=tk;
   if (ccy) document.getElementById('st-ccy').value=ccy;
