@@ -1540,6 +1540,24 @@ function parseRelay(req) {
     date, nativeUsd, chain, relay:true, note
   };
 }
+// A Relay SELL: you sent the token (currencyIn) and received proceeds (currencyOut).
+// Returns the same variables fetchSellTx computes from an on-chain parse.
+function parseRelaySell(req) {
+  const md = req.data.metadata;
+  const cin  = md.currencyIn  || {}, cout = md.currencyOut || {};
+  const outCur = cout.currency || {};
+  const qtySold = parseFloat(cin.amountFormatted)  || 0;   // token you sold
+  const outAmt  = parseFloat(cout.amountFormatted) || 0;   // proceeds received (net of fees)
+  const outUsd  = parseFloat(cout.amountUsd)       || 0;
+  const ccy = (outCur.symbol || 'USD').toUpperCase();
+  const nativeUsd = isStable(ccy) ? 1 : (outAmt ? outUsd / outAmt : 0);
+  const tx = (req.data.outTxs || [])[0] || (req.data.inTxs || [])[0] || {};
+  const sellDate = tx.timestamp ? new Date(tx.timestamp * 1000).toISOString().slice(0,10) : '';
+  return {
+    detectedQty: qtySold, proceedsNoFee: outAmt, proceedsWithFee: outAmt,
+    feeCost: 0, feeCcy: ccy, ccy, nativeUsd, sellDate
+  };
+}
 
 // ─── FETCH TX (main) ───────────────────────────────────────
 async function fetchTx() {
@@ -2532,7 +2550,17 @@ async function fetchSellTx() {
   try {
     let proceedsNoFee, proceedsWithFee, feeCost, feeCcy, ccy, sellDate, nativeUsd;
 
-    if (t.chain === 'solana') {
+    // Relay (cross-chain bridge+swap, e.g. Robinhood via relay.link) — try first.
+    // A normal on-chain hash returns null here and falls through to the parsers below.
+    const relaySell = await relayLookup(hash);
+    if (relaySell) {
+      const s = parseRelaySell(relaySell);
+      detectedQty     = s.detectedQty;
+      proceedsNoFee   = s.proceedsNoFee;
+      proceedsWithFee = s.proceedsWithFee;
+      feeCost = s.feeCost; feeCcy = s.feeCcy; ccy = s.ccy;
+      nativeUsd = s.nativeUsd; sellDate = s.sellDate;
+    } else if (t.chain === 'solana') {
       const d = await fetchSolana(hash);
       const meta = d.tx.meta;
       const accounts = d.tx.transaction.message.accountKeys || [];
