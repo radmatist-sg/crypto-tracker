@@ -365,6 +365,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
         <div class="chain-opt" data-chain="base" onclick="pickChain('base',this)">Base</div>
         <div class="chain-opt" data-chain="arbitrum" onclick="pickChain('arbitrum',this)">Arbitrum</div>
         <div class="chain-opt" data-chain="solana" onclick="pickChain('solana',this)">Solana</div>
+        <div class="chain-opt" data-chain="robinhood" onclick="pickChain('robinhood',this)">Robinhood</div>
       </div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
@@ -1491,6 +1492,55 @@ async function parseSolana(d) {
     note:'Could not identify the NFT — edit the details below.' };
 }
 
+// ─── RELAY (cross-chain bridge+swap, e.g. Robinhood via relay.link) ──────────
+// The Relay "transaction" id is what relay.link/transaction/<id> shows. One API
+// call resolves the whole route (input paid, token received, all fees). CORS: * .
+async function relayLookup(hash) {
+  if (!hash || !hash.startsWith('0x')) return null;   // Relay request ids are 0x-hashes
+  try {
+    const r = await apiGet(`https://api.relay.link/requests/v2?id=${hash}`);
+    if (!r || !r.ok) return null;
+    const d = await r.json();
+    const req = (d.requests || [])[0];
+    if (!req || req.status === 'failure') return null;
+    const md = req.data && req.data.metadata;
+    if (!md || !md.currencyIn || !md.currencyOut) return null;   // not a Relay swap
+    return req;
+  } catch { return null; }
+}
+function relayChainKey(chainId) {                     // Relay dest chainId → app chain key
+  for (const k in CHAINS) if (CHAINS[k].chainid === chainId) return k;
+  return null;
+}
+function parseRelay(req) {
+  const md   = req.data.metadata;
+  const cin  = md.currencyIn  || {}, cout = md.currencyOut || {};
+  const inCur = cin.currency  || {}, outCur = cout.currency || {};
+  const chain = relayChainKey(outCur.chainId);        // e.g. 'robinhood'
+  const amount = parseFloat(cout.amountFormatted) || 0;
+  const inAmt  = parseFloat(cin.amountFormatted)  || 0;
+  const inUsd  = parseFloat(cin.amountUsd)        || 0;
+  const inSym  = (inCur.symbol || 'USD').toUpperCase();
+  // Cost basis = what you actually paid; every fee is already inside that amount.
+  // Stablecoin input → $1 each; otherwise use the input's own USD price.
+  const nativeUsd = isStable(inSym) ? 1 : (inAmt ? inUsd / inAmt : 0);
+  const tx = (req.data.inTxs || [])[0] || (req.data.outTxs || [])[0] || {};
+  const date = tx.timestamp ? new Date(tx.timestamp * 1000).toISOString() : new Date().toISOString();
+  const fu = req.data.feesUsd || {};
+  const feeTot = ['gas','fixed','price','gateway'].reduce((s,k) => s + (parseFloat(fu[k]) || 0), 0);
+  const gasTop = md.currencyGasTopup ? (parseFloat(md.currencyGasTopup.amountUsd) || 0) : 0;
+  const destName = chain ? CHAINS[chain].name : ('chain ' + outCur.chainId);
+  const note = `Relay bridge + swap → ${destName}. Paid ${fmt(inAmt,4)} ${inSym} for ${fmt(amount,4)} ${outCur.symbol || '?'}. `
+    + `All fees (~$${fmt(feeTot,2)} relay/network${gasTop ? `, incl. $${fmt(gasTop,2)} gas top-up you keep` : ''}) `
+    + `are already inside the amount paid — cost basis = ${fmt(inAmt,2)} ${inSym}.`;
+  return {
+    type:'coin', name: outCur.name || outCur.symbol || 'Unknown', symbol: outCur.symbol || '?',
+    contract: outCur.address || '', tokenId:null, amount,
+    noFee: inAmt, withFee: inAmt, fee: 0, ccy: inSym, feeCcy: inSym,
+    date, nativeUsd, chain, relay:true, note
+  };
+}
+
 // ─── FETCH TX (main) ───────────────────────────────────────
 async function fetchTx() {
   const raw = document.getElementById('tx-input').value.trim();
@@ -1504,11 +1554,28 @@ async function fetchTx() {
   document.getElementById('parse-alert').innerHTML = '';
 
   try {
-    const chain = detectChain(raw) || S.chain;
-    if (!chain) { toast('Select a chain manually — could not auto-detect.'); btn.disabled=false; st.textContent=''; return; }
-
     const hash = extractHash(raw);
     if (!hash) throw new Error('Could not extract a transaction hash from your input.');
+
+    // Relay (cross-chain bridge+swap, e.g. Robinhood via relay.link) — try first.
+    // A normal on-chain hash returns nothing here and falls through to the parsers below.
+    st.innerHTML = '<span class="spin"></span>Checking Relay…';
+    const relayReq = await relayLookup(hash);
+    if (relayReq) {
+      const p = parseRelay(relayReq);
+      if (!p.chain) throw new Error(`Relay trade found (destination chain id ${relayReq.data.metadata.currencyOut?.currency?.chainId}), but that chain isn't supported in the app yet — ask to add it.`);
+      p.txHash = hash;
+      S.parsed = p;
+      S.chain = p.chain;
+      document.querySelectorAll('.chain-opt').forEach(o => o.classList.toggle('selected', o.dataset.chain === p.chain));
+      showParsed(p);
+      document.getElementById('parse-result').classList.add('visible');
+      st.innerHTML = '✓ Relay trade detected';
+      return;
+    }
+
+    const chain = detectChain(raw) || S.chain;
+    if (!chain) { toast('Select a chain manually — could not auto-detect.'); btn.disabled=false; st.textContent=''; return; }
 
     st.innerHTML = `<span class="spin"></span>Fetching from ${CHAINS[chain].name}…`;
 
