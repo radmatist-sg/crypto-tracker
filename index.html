@@ -321,6 +321,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
       <button class="filter-btn" onclick="setFilter('base',this)">Base</button>
       <button class="filter-btn" onclick="setFilter('arbitrum',this)">Arbitrum</button>
       <button class="filter-btn" onclick="setFilter('solana',this)">Solana</button>
+      <button class="filter-btn" onclick="setFilter('robinhood',this)">Robinhood</button>
       <button class="btn btn-secondary" style="margin-left:auto;padding:5px 13px;font-size:12px;" onclick="refreshPrices()">↻ Refresh Prices</button>
     </div>
     <div class="table-wrap">
@@ -447,6 +448,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
             <option value="base">Base</option>
             <option value="arbitrum">Arbitrum</option>
             <option value="solana">Solana</option>
+            <option value="robinhood">Robinhood</option>
           </select>
         </div>
         <div class="form-row">
@@ -769,10 +771,11 @@ const CHAINS = {
   ethereum: { name:'Ethereum', ccy:'ETH', decimals:18, rpc:'https://ethereum-rpc.publicnode.com',     chainid:1,     cg:'ethereum',     color:'#627eea' },
   base:     { name:'Base',     ccy:'ETH', decimals:18, rpc:'https://base-rpc.publicnode.com',         chainid:8453,  cg:'base',         color:'#4d7fff' },
   arbitrum: { name:'Arbitrum', ccy:'ETH', decimals:18, rpc:'https://arbitrum-one-rpc.publicnode.com', chainid:42161, cg:'arbitrum-one', color:'#28a0f0' },
-  solana:   { name:'Solana',   ccy:'SOL', decimals:9,  api:null,                              cg:'solana',       color:'#9945ff' }
+  solana:   { name:'Solana',   ccy:'SOL', decimals:9,  api:null,                              cg:'solana',       color:'#9945ff' },
+  robinhood:{ name:'Robinhood',ccy:'ETH', decimals:18, rpc:null,                              chainid:4663,  cg:'ethereum',     color:'#00c805' }
 };
-const NATIVE_CG = { ethereum:'ethereum', base:'ethereum', arbitrum:'ethereum', solana:'solana' };
-const DS_CHAIN  = { ethereum:'ethereum', base:'base', arbitrum:'arbitrum', solana:'solana' };
+const NATIVE_CG = { ethereum:'ethereum', base:'ethereum', arbitrum:'ethereum', solana:'solana', robinhood:'ethereum' };
+const DS_CHAIN  = { ethereum:'ethereum', base:'base', arbitrum:'arbitrum', solana:'solana', robinhood:'robinhood' };
 const CG = 'https://api.coingecko.com/api/v3';
 
 // Well-known Solana token mints → symbol/name
