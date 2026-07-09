@@ -368,6 +368,38 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
         <div class="chain-opt" data-chain="robinhood" onclick="pickChain('robinhood',this)">Robinhood</div>
       </div>
     </div>
+
+    <div class="form-row" style="margin-top:4px;">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
+        <input type="checkbox" id="ad-airdrop" onchange="toggleAirdrop()" style="width:auto;margin:0;">
+        🎁 This is an airdrop / staking reward
+      </label>
+    </div>
+    <div id="airdrop-opts" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px;">
+      <div class="form-row">
+        <label>Cost basis</label>
+        <select id="ad-basis" onchange="updateAirdropUI()">
+          <option value="receipt">Value at receipt (counts as airdrop income)</option>
+          <option value="carry">Same cost as a holding (it converted into the tokens)</option>
+        </select>
+      </div>
+      <div class="form-row" id="ad-value-row">
+        <label>Value at receipt (USD) — auto-filled on Fetch, editable</label>
+        <input type="number" id="ad-value" step="0.01" placeholder="0.00">
+        <div id="ad-gas-hint" style="font-size:11px;color:var(--muted);margin-top:4px;"></div>
+      </div>
+      <div class="form-row" id="ad-source-row">
+        <label>From holding (link — and cost source if converting)</label>
+        <select id="ad-source"><option value="">— none —</option></select>
+      </div>
+      <div class="form-row" id="ad-convert-row" style="display:none;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="ad-convert" style="width:auto;margin:0;">
+          Remove that holding (it became these tokens)
+        </label>
+      </div>
+    </div>
+
     <div style="display:flex;align-items:center;gap:12px;margin-top:4px;">
       <button class="btn btn-primary" id="fetch-btn" onclick="fetchTx()">Fetch Transaction</button>
       <span id="fetch-status" style="font-size:12px;color:var(--muted);"></span>
@@ -790,7 +822,7 @@ const SOL_TOKENS = {
   'WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk':  { symbol:'WEN',  name:'Wen' },
 };
 // Currencies treated as stablecoins (USD-pegged, nativeUsd = 1)
-const STABLECOINS = new Set(['USDC','USDT','DAI','BUSD','FRAX','USDS']);
+const STABLECOINS = new Set(['USDC','USDT','DAI','BUSD','FRAX','USDS','USD']);
 function isStable(ccy) { return STABLECOINS.has(ccy); }
 
 // ─── STATE ─────────────────────────────────────────────────
@@ -1559,6 +1591,88 @@ function parseRelaySell(req) {
   };
 }
 
+// ─── AIRDROP / REWARD ──────────────────────────────────────
+function toggleAirdrop() {
+  const on = document.getElementById('ad-airdrop').checked;
+  document.getElementById('airdrop-opts').style.display = on ? 'block' : 'none';
+  if (on) populateAirdropSources();
+  updateAirdropUI();
+}
+function updateAirdropUI() {
+  const mode = document.getElementById('ad-basis').value;
+  document.getElementById('ad-value-row').style.display   = mode === 'receipt' ? 'block' : 'none';
+  document.getElementById('ad-convert-row').style.display = mode === 'carry'   ? 'block' : 'none';
+}
+function populateAirdropSources() {
+  const sel = document.getElementById('ad-source');
+  if (!sel) return;
+  const cur = sel.value;
+  const opts = ['<option value="">— none —</option>'];
+  for (const t of S.trades) {
+    if (t.kind === 'sell' || t.status === 'closed' || t.airdrop) continue;   // open holdings only
+    const usd = entryUsd(t);
+    opts.push(`<option value="${t.id}">${(t.asset?.name)||'Unknown'}${t.type==='nft'?' (NFT)':''} — cost $${fmt(usd,2)}</option>`);
+  }
+  sel.innerHTML = opts.join('');
+  if (cur) sel.value = cur;
+}
+// Value an airdrop after the tx is parsed: FMV = amount × live token price, plus gas.
+async function valueAirdrop(p, chain) {
+  const px = p.contract ? await tokenPrice(chain, p.contract) : null;
+  const gasUsd = (p.fee || 0) * (p.nativeUsd || 0);
+  p.airdrop  = true;
+  p.gasUsd   = gasUsd;
+  p.fmvPrice = px || 0;
+  p.fmv      = (px || 0) * (p.amount || 0);
+  p.note     = 'Airdrop / reward — cost basis comes from the "Value at receipt" field above (plus gas), not the amount paid.';
+  document.getElementById('ad-value').value = p.fmv ? p.fmv.toFixed(2) : '';
+  let hint = gasUsd ? `Gas paid ≈ $${fmt(gasUsd,2)} (added to your cost basis).` : 'No gas detected.';
+  if (!px) hint += ' Live price not found — enter the value manually.';
+  document.getElementById('ad-gas-hint').textContent = hint;
+}
+function addAirdrop(p, f) {
+  const mode   = document.getElementById('ad-basis').value;
+  const gasUsd = p.gasUsd || 0;
+  const srcId  = document.getElementById('ad-source').value;
+  const src    = srcId ? S.trades.find(t => t.id === srcId) : null;
+  const sourceLink = src ? { id: src.id, name: src.asset?.name || '' } : null;
+
+  let basisUsd, income = 0;
+  if (mode === 'carry') {
+    basisUsd = (src ? entryUsd(src) : 0) + gasUsd;           // inherit the holding's cost
+    if (src && document.getElementById('ad-convert').checked) {
+      tombstone(src.id);
+      S.trades = S.trades.filter(t => t.id !== src.id);       // the holding became these tokens
+    }
+  } else {
+    const val = parseFloat(document.getElementById('ad-value').value) || 0;
+    basisUsd = val + gasUsd;                                  // value at receipt + gas
+    income   = val;                                           // the taxable income figure
+  }
+
+  S.trades.push({
+    id: Date.now()+'', _m: Date.now(), txHash: p.txHash, chain: p.chain, type: 'coin',
+    date: p.date, notes: f.notes, airdrop: true, income, source: sourceLink,
+    asset: { name: f.name, symbol: f.symbol, contract: f.contract, tokenId: null, amount: f.amount },
+    entry: { noFee: basisUsd, fee: 0, withFee: basisUsd, ccy: 'USD', feeCcy: 'USD', nativeUsd: 1 },
+    priceLive: null
+  });
+  persist();
+
+  S.parsed = null;
+  document.getElementById('tx-input').value = '';
+  document.getElementById('ad-airdrop').checked = false;
+  toggleAirdrop();
+  document.getElementById('ad-value').value = '';
+  document.getElementById('parse-result').classList.remove('visible');
+  document.getElementById('trade-notes').value = '';
+  document.getElementById('fetch-status').textContent = '';
+  document.querySelectorAll('.chain-opt').forEach(o => o.classList.remove('selected'));
+  S.chain = null;
+  toast(`${f.name} airdrop added ✓`);
+  goPortfolio();
+}
+
 // ─── FETCH TX (main) ───────────────────────────────────────
 async function fetchTx() {
   const raw = document.getElementById('tx-input').value.trim();
@@ -1610,6 +1724,12 @@ async function fetchTx() {
 
     st.innerHTML = '<span class="spin"></span>Getting prices…';
     p.nativeUsd = await nativePrice(chain);
+
+    // Airdrop / reward: value the tokens received (FMV + gas) instead of "amount paid".
+    if (document.getElementById('ad-airdrop').checked) {
+      st.innerHTML = '<span class="spin"></span>Valuing airdrop…';
+      await valueAirdrop(p, chain);
+    }
 
     S.parsed = p;
     showParsed(p);
@@ -1668,6 +1788,8 @@ function addTrade() {
   const noFee    = parseFloat(document.getElementById('e-cost').value)   || p.noFee;
   const type     = document.getElementById('e-type').value;
   const notes    = document.getElementById('trade-notes').value.trim();
+
+  if (p.airdrop) { addAirdrop(p, { name, symbol, contract, amount, type, notes }); return; }
 
   // Stablecoin costs are already in USD (1:1), so nativeUsd = 1
   const entryNativeUsd = isStable(p.ccy) ? 1 : (p.nativeUsd || 0);
@@ -1889,7 +2011,7 @@ function rowHtml(t, isLot=false, soldOut=false) {
       <div class="asset-cell">
         ${iconHtml(imgFor((t.asset.contract||'').toLowerCase()), t.asset.symbol, ch.color)}
         <div>
-          <div class="asset-name">${isLot?'<span class="lot-prefix">↳</span>':''}${esc(t.asset.name)}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
+          <div class="asset-name">${isLot?'<span class="lot-prefix">↳</span>':''}${esc(t.asset.name)}${t.airdrop?'<span class="pos-badge" title="Airdrop / reward">🎁 AIRDROP</span>':''}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
           <div class="asset-sub">${fmtDate(t.date)} · ${txLink}</div>
         </div>
       </div>
@@ -1989,7 +2111,7 @@ function positionHtml(i, m) {
         <span class="pos-caret">${caret}</span>
         ${iconHtml(imgFor((t0.asset.contract||'').toLowerCase()), t0.asset.symbol, ch.color)}
         <div>
-          <div class="asset-name">${esc(t0.asset.name)}<span class="pos-badge">${count} BUY${count>1?'S':''}</span>${fullySold?'<span class="sold-badge">SOLD</span>':partial?'<span class="sold-badge">PART. SOLD</span>':''}</div>
+          <div class="asset-name">${esc(t0.asset.name)}${t0.airdrop?'<span class="pos-badge" title="Airdrop / reward">🎁 AIRDROP</span>':''}<span class="pos-badge">${count} BUY${count>1?'S':''}</span>${fullySold?'<span class="sold-badge">SOLD</span>':partial?'<span class="sold-badge">PART. SOLD</span>':''}</div>
           <div class="asset-sub">${subText}</div>
         </div>
       </div>
