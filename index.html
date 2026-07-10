@@ -789,6 +789,22 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   </div>
 </div>
 
+<!-- ── SHARE CARD MODAL ──────────────────────────────────── -->
+<div id="share-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:210;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;max-width:420px;width:100%;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h3 style="font-size:15px;font-weight:700;">Share your win</h3>
+      <button onclick="closeShareModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;">×</button>
+    </div>
+    <img id="share-preview" alt="Trade card preview" style="width:100%;border-radius:12px;display:block;margin-bottom:14px;background:#000;">
+    <div style="display:flex;gap:10px;">
+      <button class="btn btn-primary" style="flex:1;" onclick="doShareCard()">Share</button>
+      <button class="btn btn-secondary" style="flex:1;" onclick="doDownloadCard()">Download</button>
+    </div>
+    <div id="share-hint" style="font-size:11px;color:var(--muted);margin-top:10px;text-align:center;"></div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 // ─── SUPABASE ACCOUNT / SYNC ───────────────────────────────
@@ -1293,6 +1309,17 @@ async function fetchEvm(chain, hash) {
 // specific key (BaseScan/Arbiscan), fall back to that chain's own V1 explorer — a
 // BaseScan key would be rejected by the Etherscan host. Returns [] if no usable key.
 async function fetchInternalEth(chain, hash) {
+  // Robinhood chain isn't on the Etherscan family — read its internal transfers
+  // from the Robinhood Blockscout explorer (Etherscan-compatible API, no key needed).
+  // NFT sale proceeds on Robinhood arrive as an internal ETH transfer, just like Seaport.
+  if (chain === 'robinhood') {
+    try {
+      const r = await fetch(`https://robinhoodchain.blockscout.com/api?module=account&action=txlistinternal&txhash=${hash}`);
+      const d = await r.json();
+      if (d.status !== '1' || !Array.isArray(d.result)) return [];
+      return d.result.map(x => ({ from:x.from, to:x.to, value:x.value }));
+    } catch { return []; }
+  }
   const V1 = { ethereum:'https://api.etherscan.io/api',
                base:'https://api.basescan.org/api',
                arbitrum:'https://api.arbiscan.io/api' };
@@ -2129,6 +2156,7 @@ function positionHtml(i, m) {
     <td>${pnlHtml}</td>
     <td><div class="trade-actions">
       ${m.remainingQty>0?`<button class="action-btn" title="Sell some or all of this position" onclick="openSellModal('${t0.id}')">Sell</button>`:''}
+      ${m.soldQty>0?`<button class="action-btn" title="Share this result as an image" onclick="openShareModal(${i})">Share</button>`:''}
       <button class="action-btn" title="Refresh price for all buys" onclick="refreshGroup(${i})">↻</button>
     </div></td>
   </tr>`;
@@ -2170,6 +2198,131 @@ function sellRowHtml(s, m) {
     <td><span class="${cls}">${sign}$${fmt(Math.abs(realized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>`:''}</td>
     <td><div class="trade-actions"><button class="action-btn del" title="Undo this sale" onclick="delTrade('${s.id}')">×</button></div></td>
   </tr>`;
+}
+
+// ─── SHARE CARD (canvas → PNG, download + native share) ────
+// Builds a dark, on-brand "flex" image of a realized result. Drawn on a
+// <canvas> (no libraries, works offline) so it exports and shares reliably.
+let _shareCanvas = null, _shareName = 'trade.png';
+
+function openShareModal(i) {
+  const g = _groups[i]; if (!g) return;
+  const m  = positionMetrics(g);
+  const t0 = m.t0;
+  const soldBasis = m.avgCostUsd * m.soldQty;      // USD cost of the portion sold
+  const roi = soldBasis ? m.realizedUsd / soldBasis * 100 : null;
+  const ch  = CHAINS[t0.chain] || { color:'#888', name:t0.chain };
+  _shareCanvas = drawTradeCard({
+    name: t0.asset.name || 'Unknown',
+    symbol: t0.asset.symbol || '',
+    realized: m.realizedUsd, roi,
+    chainName: ch.name,
+    date: new Date().toISOString()
+  });
+  _shareName = `${(t0.asset.symbol || t0.asset.name || 'trade').replace(/[^a-z0-9]/gi,'_')}_win.png`;
+  document.getElementById('share-preview').src = _shareCanvas.toDataURL('image/png');
+  document.getElementById('share-hint').textContent =
+    (navigator.canShare && typeof navigator.share === 'function')
+      ? "Share opens your phone's share sheet (Instagram, WhatsApp, X…)."
+      : 'Tap Download to save the image, then post it anywhere.';
+  document.getElementById('share-modal').style.display = 'flex';
+}
+function closeShareModal(){ document.getElementById('share-modal').style.display = 'none'; }
+
+// Draw a 1080×1080 card and return the canvas element.
+function drawTradeCard(d) {
+  const W = 1080, H = 1080;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const up = (d.roi == null ? d.realized >= 0 : d.roi >= 0);
+  const accent = up ? '#00d084' : '#ff4d4d';
+  const FAM = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+  // background + colored glow behind the headline
+  x.fillStyle = '#0d0d0d'; x.fillRect(0,0,W,H);
+  const glow = x.createRadialGradient(W/2, 470, 40, W/2, 470, 640);
+  glow.addColorStop(0, up ? 'rgba(0,208,132,.22)' : 'rgba(255,77,77,.20)');
+  glow.addColorStop(1, 'rgba(13,13,13,0)');
+  x.fillStyle = glow; x.fillRect(0,0,W,H);
+  x.strokeStyle = '#2a2a2a'; x.lineWidth = 2;
+  roundRect(x, 24, 24, W-48, H-48, 28); x.stroke();
+
+  // wordmark (top-left)
+  x.textAlign = 'left'; x.textBaseline = 'alphabetic';
+  x.fillStyle = '#e8e8e8'; x.font = `700 40px ${FAM}`;
+  x.fillText('Invest', 72, 108);
+  x.fillStyle = accent; x.fillText('Track', 72 + x.measureText('Invest').width, 108);
+
+  // chain (top-right)
+  x.textAlign = 'right'; x.fillStyle = '#777'; x.font = `600 26px ${FAM}`;
+  x.fillText((d.chainName || '').toUpperCase(), W-72, 104);
+
+  // headline: big ROI %, or $ P&L if we have no cost basis
+  x.textAlign = 'center';
+  x.shadowColor = up ? 'rgba(0,208,132,.55)' : 'rgba(255,77,77,.5)';
+  x.shadowBlur = 46; x.fillStyle = accent;
+  const head = d.roi != null ? `${up?'+':'−'}${fmt(Math.abs(d.roi),1)}%`
+                             : `${up?'+':'−'}$${fmt(Math.abs(d.realized),0)}`;
+  let hs = 200; x.font = `800 ${hs}px ${FAM}`;
+  while (x.measureText(head).width > W-140 && hs > 90){ hs -= 8; x.font = `800 ${hs}px ${FAM}`; }
+  x.fillText(head, W/2, 520);
+  x.shadowBlur = 0;
+
+  x.fillStyle = '#777'; x.font = `700 30px ${FAM}`;
+  x.fillText(d.roi != null ? 'REALIZED RETURN' : 'REALIZED P&L', W/2, 600);
+
+  // asset name (shrinks to fit) + symbol
+  let ns = 64; x.font = `800 ${ns}px ${FAM}`;
+  while (x.measureText(d.name).width > W-160 && ns > 30){ ns -= 3; x.font = `800 ${ns}px ${FAM}`; }
+  x.fillStyle = '#e8e8e8'; x.fillText(d.name, W/2, 720);
+  if (d.symbol && d.symbol.toLowerCase() !== d.name.toLowerCase()) {
+    x.fillStyle = '#777'; x.font = `600 34px ${FAM}`;
+    x.fillText(d.symbol.toUpperCase(), W/2, 772);
+  }
+
+  // realized $ pill
+  const pillTxt = `${d.realized>=0?'+':'−'}$${fmt(Math.abs(d.realized),2)} realized`;
+  x.font = `700 40px ${FAM}`;
+  const pw = x.measureText(pillTxt).width + 72, ph = 90;
+  const px = (W-pw)/2, py = 838;
+  x.fillStyle = up ? 'rgba(0,208,132,.12)' : 'rgba(255,77,77,.12)';
+  roundRect(x, px, py, pw, ph, 45); x.fill();
+  x.strokeStyle = up ? 'rgba(0,208,132,.4)' : 'rgba(255,77,77,.4)'; x.lineWidth = 2;
+  roundRect(x, px, py, pw, ph, 45); x.stroke();
+  x.fillStyle = accent; x.fillText(pillTxt, W/2, py + ph/2 + 14);
+
+  // footer: date + watermark
+  x.font = `500 28px ${FAM}`;
+  x.textAlign = 'left';  x.fillStyle = '#555'; x.fillText(fmtDate(d.date), 72, H-70);
+  x.textAlign = 'right'; x.fillStyle = '#777'; x.fillText('rhetoriqo', W-72, H-70);
+  return c;
+}
+function roundRect(x, rx, ry, w, h, r){
+  x.beginPath(); x.moveTo(rx+r,ry);
+  x.arcTo(rx+w,ry,rx+w,ry+h,r); x.arcTo(rx+w,ry+h,rx,ry+h,r);
+  x.arcTo(rx,ry+h,rx,ry,r);     x.arcTo(rx,ry,rx+w,ry,r); x.closePath();
+}
+function _withCardBlob(cb){ if (_shareCanvas) _shareCanvas.toBlob(b => cb(b), 'image/png'); }
+function doDownloadCard(){
+  _withCardBlob(b => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b); a.download = _shareName; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  });
+}
+function doShareCard(){
+  _withCardBlob(async b => {
+    const file = new File([b], _shareName, { type:'image/png' });
+    if (navigator.canShare && navigator.canShare({ files:[file] })) {
+      try { await navigator.share({ files:[file], text:'My trade on InvestTrack 📈' }); }
+      catch(e){ /* user dismissed the share sheet */ }
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(b); a.download = _shareName; a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast('Image downloaded — share it from your gallery.');
+    }
+  });
 }
 
 // Refresh the live price for every buy in a position at once.
