@@ -2227,10 +2227,15 @@ async function openShareModal(i) {
   const roi = soldBasis ? m.realizedUsd / soldBasis * 100 : null;
   const ch  = CHAINS[t0.chain] || { color:'#888', name:t0.chain };
   const logo = await loadCorsImg(imgFor((t0.asset.contract || '').toLowerCase()));
+  // Avg entry (USD/unit, incl. fees — matches the P&L basis) and avg exit (USD/unit).
+  const totProceeds = g.sells.reduce((s,x) => s + (x.sell.proceedsUsd || 0), 0);
+  const totSoldQty  = g.sells.reduce((s,x) => s + (x.sell.qty || 0), 0);
+  const entry = m.avgCostUsd || null;
+  const exit  = totSoldQty ? totProceeds / totSoldQty : null;
   _shareCanvas = drawTradeCard({
     name: t0.asset.name || 'Unknown',
     symbol: t0.asset.symbol || '',
-    realized: m.realizedUsd, roi, logo,
+    realized: m.realizedUsd, roi, logo, entry, exit,
     chainName: ch.name,
     date: new Date().toISOString()
   });
@@ -2304,26 +2309,43 @@ function drawTradeCard(d) {
   x.shadowBlur = 0;
 
   x.fillStyle = '#777'; x.font = `700 30px ${FAM}`;
-  x.fillText(d.roi != null ? 'REALIZED RETURN' : 'REALIZED P&L', W/2, 600);
+  x.fillText(d.roi != null ? 'REALIZED RETURN' : 'REALIZED P&L', W/2, 596);
 
   // asset name (shrinks to fit) + symbol
-  let ns = 64; x.font = `800 ${ns}px ${FAM}`;
+  let ns = 60; x.font = `800 ${ns}px ${FAM}`;
   while (x.measureText(d.name).width > W-160 && ns > 30){ ns -= 3; x.font = `800 ${ns}px ${FAM}`; }
-  x.fillStyle = '#e8e8e8'; x.fillText(d.name, W/2, 720);
+  x.fillStyle = '#e8e8e8'; x.fillText(d.name, W/2, 672);
   if (d.symbol && d.symbol.toLowerCase() !== d.name.toLowerCase()) {
-    x.fillStyle = '#777'; x.font = `600 34px ${FAM}`;
-    x.fillText(d.symbol.toUpperCase(), W/2, 772);
+    x.fillStyle = '#777'; x.font = `600 32px ${FAM}`;
+    x.fillText(d.symbol.toUpperCase(), W/2, 714);
+  }
+
+  // avg entry → exit price row (only if we have the figures)
+  const pf = v => '$' + (v >= 1 ? fmt(v,2) : fmt(v, v < 0.001 ? 8 : 4));
+  const havePrices = d.entry != null && d.exit != null;
+  let py = 820;                                        // pill sits higher when no price row
+  if (havePrices) {
+    const colL = W*0.31, colR = W*0.69;
+    x.fillStyle = '#777'; x.font = `700 24px ${FAM}`;
+    x.fillText('ENTRY (INCL. FEES)', colL, 792);
+    x.fillText('EXIT', colR, 792);
+    x.font = `700 40px ${FAM}`;
+    x.fillStyle = '#e8e8e8'; x.fillText(pf(d.entry), colL, 842);
+    x.fillStyle = '#e8e8e8'; x.fillText(pf(d.exit),  colR, 842);
+    x.fillStyle = up ? '#00d084' : '#ff4d4d'; x.font = `700 44px ${FAM}`;
+    x.fillText('→', W/2, 840);
+    py = 902;
   }
 
   // realized $ pill
   const pillTxt = `${d.realized>=0?'+':'−'}$${fmt(Math.abs(d.realized),2)} realized`;
   x.font = `700 40px ${FAM}`;
-  const pw = x.measureText(pillTxt).width + 72, ph = 90;
-  const px = (W-pw)/2, py = 838;
+  const pw = x.measureText(pillTxt).width + 72, ph = 84;
+  const px = (W-pw)/2;
   x.fillStyle = up ? 'rgba(0,208,132,.12)' : 'rgba(255,77,77,.12)';
-  roundRect(x, px, py, pw, ph, 45); x.fill();
+  roundRect(x, px, py, pw, ph, ph/2); x.fill();
   x.strokeStyle = up ? 'rgba(0,208,132,.4)' : 'rgba(255,77,77,.4)'; x.lineWidth = 2;
-  roundRect(x, px, py, pw, ph, 45); x.stroke();
+  roundRect(x, px, py, pw, ph, ph/2); x.stroke();
   x.fillStyle = accent; x.fillText(pillTxt, W/2, py + ph/2 + 14);
 
   // footer: date + watermark
