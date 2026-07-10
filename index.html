@@ -805,7 +805,7 @@ const CHAINS = {
   base:     { name:'Base',     ccy:'ETH', decimals:18, rpc:'https://base-rpc.publicnode.com',         chainid:8453,  cg:'base',         color:'#4d7fff' },
   arbitrum: { name:'Arbitrum', ccy:'ETH', decimals:18, rpc:'https://arbitrum-one-rpc.publicnode.com', chainid:42161, cg:'arbitrum-one', color:'#28a0f0' },
   solana:   { name:'Solana',   ccy:'SOL', decimals:9,  api:null,                              cg:'solana',       color:'#9945ff' },
-  robinhood:{ name:'Robinhood',ccy:'ETH', decimals:18, rpc:null,                              chainid:4663,  cg:'ethereum',     color:'#00c805' }
+  robinhood:{ name:'Robinhood',ccy:'ETH', decimals:18, rpc:'https://rpc.mainnet.chain.robinhood.com', chainid:4663,  cg:'ethereum',     color:'#00c805' }
 };
 const NATIVE_CG = { ethereum:'ethereum', base:'ethereum', arbitrum:'ethereum', solana:'solana', robinhood:'ethereum' };
 const DS_CHAIN  = { ethereum:'ethereum', base:'base', arbitrum:'arbitrum', solana:'solana', robinhood:'robinhood' };
@@ -1177,6 +1177,7 @@ function detectChain(s) {
   if (/basescan\.org/i.test(s))  return 'base';
   if (/arbiscan\.io/i.test(s))   return 'arbitrum';
   if (/solscan\.io|solana\.fm|explorer\.solana/i.test(s)) return 'solana';
+  if (/robinhoodchain\.blockscout\.com|chain\.robinhood\.com/i.test(s)) return 'robinhood';
   // Raw hash: 0x = EVM (unknown chain), else check Solana sig length
   const clean = s.trim();
   if (!clean.startsWith('0x') && /^[A-Za-z0-9]{80,110}$/.test(clean)) return 'solana';
