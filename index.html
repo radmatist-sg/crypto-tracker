@@ -2205,17 +2205,32 @@ function sellRowHtml(s, m) {
 // <canvas> (no libraries, works offline) so it exports and shares reliably.
 let _shareCanvas = null, _shareName = 'trade.png';
 
-function openShareModal(i) {
+// Load an image cross-origin so it can be drawn AND still exported. If the host
+// blocks CORS (or the URL 404s) we resolve null and fall back to a letter badge —
+// the card must never end up "tainted", which would break download/share.
+function loadCorsImg(url) {
+  return new Promise(res => {
+    if (!url) return res(null);
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload  = () => res(im);
+    im.onerror = () => res(null);
+    im.src = url;
+  });
+}
+
+async function openShareModal(i) {
   const g = _groups[i]; if (!g) return;
   const m  = positionMetrics(g);
   const t0 = m.t0;
   const soldBasis = m.avgCostUsd * m.soldQty;      // USD cost of the portion sold
   const roi = soldBasis ? m.realizedUsd / soldBasis * 100 : null;
   const ch  = CHAINS[t0.chain] || { color:'#888', name:t0.chain };
+  const logo = await loadCorsImg(imgFor((t0.asset.contract || '').toLowerCase()));
   _shareCanvas = drawTradeCard({
     name: t0.asset.name || 'Unknown',
     symbol: t0.asset.symbol || '',
-    realized: m.realizedUsd, roi,
+    realized: m.realizedUsd, roi, logo,
     chainName: ch.name,
     date: new Date().toISOString()
   });
@@ -2256,6 +2271,26 @@ function drawTradeCard(d) {
   // chain (top-right)
   x.textAlign = 'right'; x.fillStyle = '#777'; x.font = `600 26px ${FAM}`;
   x.fillText((d.chainName || '').toUpperCase(), W-72, 104);
+
+  // asset logo — circular token badge, top-center (falls back to a letter mark)
+  const lcx = W/2, lcy = 258, lr = 78;
+  x.save();
+  x.beginPath(); x.arc(lcx, lcy, lr, 0, Math.PI*2); x.closePath();
+  x.fillStyle = '#1e1e1e'; x.fill();
+  if (d.logo) {
+    x.clip();
+    const s = Math.max((2*lr)/d.logo.width, (2*lr)/d.logo.height);   // cover-fit
+    const iw = d.logo.width*s, ih = d.logo.height*s;
+    x.drawImage(d.logo, lcx-iw/2, lcy-ih/2, iw, ih);
+  } else {
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    x.fillStyle = accent; x.font = `800 60px ${FAM}`;
+    x.fillText((d.symbol || d.name || '?').slice(0,3).toUpperCase(), lcx, lcy+2);
+  }
+  x.restore();
+  x.strokeStyle = up ? 'rgba(0,208,132,.5)' : 'rgba(255,77,77,.45)';
+  x.lineWidth = 3;
+  x.beginPath(); x.arc(lcx, lcy, lr, 0, Math.PI*2); x.stroke();
 
   // headline: big ROI %, or $ P&L if we have no cost basis
   x.textAlign = 'center';
