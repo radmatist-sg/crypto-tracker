@@ -1383,9 +1383,22 @@ function parseEvm(d) {
         costCcy = /^W?ETH$/i.test(best.sym) ? ccy : (best.sym || ccy);
       }
     }
+    // A mint can create several NFTs in one transaction: the receipt then holds one
+    // Transfer log per token, and tx.value is the TOTAL paid for all of them. Collect
+    // every ERC-721 from this contract that landed in the owner's wallet — each one
+    // becomes its own lot (see addTrade), so floor price and P&L stay per-NFT.
+    const lotIds = n721
+      ? nfts.filter(x => x.contractAddress.toLowerCase() === n.contractAddress.toLowerCase()
+                      && x.to.toLowerCase() === owner)
+            .map(x => x.tokenID)
+      : [];
+    const count = n721 ? Math.max(1, lotIds.length) : parseInt(n.tokenValue||'1');
     return { type:'nft', name:n.tokenName||'Unknown NFT', symbol:n.tokenSymbol||'?',
-      contract:n.contractAddress, tokenId:n.tokenID, amount:n1155&&!n721?parseInt(n.tokenValue||'1'):1,
-      noFee, fee:gasEth, withFee:noFee+gasEth, ccy:costCcy, feeCcy:ccy, date };
+      contract:n.contractAddress, tokenId:n.tokenID, tokenIds:lotIds, amount:count,
+      noFee, fee:gasEth, withFee:noFee+gasEth, ccy:costCcy, feeCcy:ccy, date,
+      note: (n721 && count > 1)
+        ? `${count} NFTs minted in this transaction (#${lotIds.join(', #')}) — ${fmt(noFee/count,4)} ${costCcy} each. They'll be added as ${count} separate lots so each can be valued and sold on its own.`
+        : undefined };
   }
   // ERC-20 token received (DEX swap)
   const gotTok = tokens.filter(t => t.to.toLowerCase() === from.toLowerCase());
@@ -1787,7 +1800,10 @@ function showParsed(p) {
   document.getElementById('r-asset').textContent     = `${p.name} (${p.symbol})`;
   document.getElementById('r-asset-sub').textContent = p.contract ? p.contract.slice(0,18)+'…' : p.chain;
   document.getElementById('r-amount').textContent    = fmtAmt(p.amount, p.type);
-  document.getElementById('r-amount-sub').textContent = p.type.toUpperCase() + (p.tokenId ? ` #${p.tokenId}` : '');
+  const multi = p.type === 'nft' && Array.isArray(p.tokenIds) && p.tokenIds.length > 1;
+  document.getElementById('r-amount-sub').textContent = multi
+    ? `NFT #${p.tokenIds.join(', #')}`
+    : p.type.toUpperCase() + (p.tokenId ? ` #${p.tokenId}` : '');
   document.getElementById('r-no-fee').textContent    = `${fmt(p.noFee,4)} ${p.ccy}`;
   document.getElementById('r-no-fee-usd').textContent = costUsd ? `≈ $${fmt(p.noFee*costUsd,2)}` : '';
   document.getElementById('r-with-fee').textContent  = `${fmt(p.withFee,4)} ${p.ccy}`;
@@ -1821,11 +1837,21 @@ function addTrade() {
 
   // Stablecoin costs are already in USD (1:1), so nativeUsd = 1
   const entryNativeUsd = isStable(p.ccy) ? 1 : (p.nativeUsd || 0);
-  S.trades.push({
-    id: Date.now()+'', _m: Date.now(), txHash:p.txHash, chain:p.chain, type, date:p.date, notes,
-    asset:  { name, symbol, contract, tokenId:p.tokenId||null, amount },
-    entry:  { noFee, fee:p.fee, withFee:noFee+(isStable(p.ccy)?0:p.fee), ccy:p.ccy, feeCcy:p.feeCcy||p.ccy, nativeUsd:entryNativeUsd },
-    priceLive: null
+
+  // A multi-NFT mint becomes one lot per token: the cost and the gas shown are the
+  // TOTAL for the transaction, so split both evenly across the tokens. Every NFT
+  // valuation in this app is per-NFT (floor × 1), so one row per NFT keeps it right.
+  const ids = (type === 'nft' && Array.isArray(p.tokenIds) && p.tokenIds.length > 1) ? p.tokenIds : null;
+  const lots = ids ? ids.map(id => ({ tokenId:id, cost:noFee/ids.length, gas:p.fee/ids.length }))
+                   : [{ tokenId:p.tokenId||null, cost:noFee, gas:p.fee }];
+
+  lots.forEach((lot, i) => {
+    S.trades.push({
+      id: (Date.now()+i)+'', _m: Date.now(), txHash:p.txHash, chain:p.chain, type, date:p.date, notes,
+      asset:  { name, symbol, contract, tokenId:lot.tokenId, amount: ids ? 1 : amount },
+      entry:  { noFee:lot.cost, fee:lot.gas, withFee:lot.cost+(isStable(p.ccy)?0:lot.gas), ccy:p.ccy, feeCcy:p.feeCcy||p.ccy, nativeUsd:entryNativeUsd },
+      priceLive: null
+    });
   });
   persist();
 
@@ -1838,7 +1864,7 @@ function addTrade() {
   document.querySelectorAll('.chain-opt').forEach(o => o.classList.remove('selected'));
   S.chain = null;
 
-  toast(`${name} added ✓`);
+  toast(ids ? `${name} — ${ids.length} NFTs added as separate lots ✓` : `${name} added ✓`);
   goPortfolio();
 }
 
