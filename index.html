@@ -2097,8 +2097,12 @@ function rowHtml(t, isLot=false, soldOut=false, frac=1, costFrac=null) {
     priceCell = `<span class="price-cell" onclick="editPrice('${t.id}')" title="Click to set price" style="color:var(--muted);font-size:11px;">click to set</span>`;
   }
 
+  // A lot with nothing left behaves like a closed one: no live price to show, nothing to
+  // sell or refresh. Refreshing it would rewrite the price on a trade that is over.
+  if (soldOut) priceCell = '<span class="neutral">—</span>';
+
   // Action buttons
-  const actions = closed
+  const actions = (closed || soldOut)
     ? `<button class="action-btn del" title="Delete" onclick="delTrade('${t.id}')">×</button>`
     : `<button class="action-btn" title="Sell / close position" onclick="openSellModal('${t.id}')">Sell</button>
        <button class="action-btn" title="Refresh price" onclick="refreshOne('${t.id}')">↻</button>
@@ -2169,8 +2173,19 @@ function positionHtml(i, m) {
   }
 
   // ── Current price (shared across buys) ──
+  // A fully-sold position has no stake left, so a live market price is meaningless on it
+  // — and worse, refreshing one visibly rewrites the number sitting on a closed trade,
+  // which reads as if the exit price had been overwritten. Show what it actually sold for.
   let priceCell;
-  if (m.livePrice !== null) {
+  if (fullySold) {
+    const exitPer = m.soldQty ? m.proceedsUsd/m.soldQty : 0;
+    const nativeProceeds = g.sells.reduce((s,x)=>s+(/^W?(ETH|SOL)$/i.test(x.sell.ccy||'') ? (x.sell.proceeds||0) : 0),0);
+    const perNative = (nativeProceeds && m.soldQty) ? nativeProceeds/m.soldQty : 0;
+    const disp = (isNft && perNative)
+      ? `${fmt(perNative,4)} ${natCcy(t0)} <span style="font-size:11px;">$${fmt(exitPer,2)}</span>`
+      : `$${fmt(exitPer, exitPer<0.001?8:4)}`;
+    priceCell = `<span style="color:var(--muted);font-size:12px;" title="What this position sold for — it is closed, so there is no live price">sold ${disp}</span>`;
+  } else if (m.livePrice !== null) {
     const disp = isNft
       ? `${fmt(m.livePrice,4)} ${natCcy(t0)}${natRate(t0)?` <span style="color:var(--muted);font-size:11px;">$${fmt(m.livePrice*natRate(t0),2)}</span>`:''}`
       : `$${fmt(m.livePrice, m.livePrice<0.001?8:4)}`;
@@ -2247,7 +2262,7 @@ function positionHtml(i, m) {
     <td><div class="trade-actions">
       ${m.remainingQty>0?`<button class="action-btn" title="Sell some or all of this position" onclick="openSellModal('${t0.id}')">Sell</button>`:''}
       ${m.soldQty>0?`<button class="action-btn" title="Share this result as an image" onclick="openShareModal(${i})">Share</button>`:''}
-      <button class="action-btn" title="Refresh price for all buys" onclick="refreshGroup(${i})">↻</button>
+      ${m.remainingQty>0?`<button class="action-btn" title="Refresh price for all buys" onclick="refreshGroup(${i})">↻</button>`:''}
     </div></td>
   </tr>`;
 
