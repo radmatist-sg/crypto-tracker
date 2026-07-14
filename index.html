@@ -3788,8 +3788,17 @@ function stockMetrics(g) {
   const openVal = marketValue!=null ? marketValue : (remainingQty>0?remainingCost:0);
   const absReturn = proceeds + dividends + openVal - totalCost;
   const returnPct = totalCost ? absReturn/totalCost*100 : null;
+  // Part-sold extras, mirroring the crypto side: the trade's outcome so far, how much
+  // capital is back in hand, and the price the remaining shares must reach to be whole.
+  const totalPnl = realized + dividends + (unrealized || 0);
+  const totalPnlPct = totalCost ? totalPnl/totalCost*100 : null;
+  const cashBack = proceeds + dividends;
+  const recoveredPct = totalCost ? Math.min(100, cashBack/totalCost*100) : 0;
+  const stillOut = Math.max(0, totalCost - cashBack);
+  const breakEven = remainingQty ? stillOut/remainingQty : null;
   const m = { ...g, totalBought, avgCost, soldQty, remainingQty, remainingCost, realized, dividends,
-    proceeds, totalInvested:totalCost, px, marketValue, unrealized, absReturn, returnPct };
+    proceeds, totalInvested:totalCost, px, marketValue, unrealized, absReturn, returnPct,
+    totalPnl, totalPnlPct, cashBack, recoveredPct, stillOut, breakEven, soldBasis };
   m.annual = xirr(stockFlows(g, m));
   return m;
 }
@@ -3876,13 +3885,24 @@ function renderStockStats(ms) {
 function stockRowHtml(g) {
   const sym=ccySym(g.ccy);
   const closed = g.remainingQty<=0;
+  const partSold = g.soldQty>0 && !closed;
   const sharesCell = (closed?'<span class="neutral">closed</span>':fmt(g.remainingQty, g.remainingQty%1?4:0))
-    + (g.soldQty>0 && !closed ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmt(g.soldQty, g.soldQty%1?4:0)} of ${fmt(g.totalBought, g.totalBought%1?4:0)}</span>`:'');
+    + (partSold ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmt(g.soldQty, g.soldQty%1?4:0)} of ${fmt(g.totalBought, g.totalBought%1?4:0)}</span>`:'')
+    + (partSold && g.totalInvested ? `<span style="display:block;color:var(--muted);font-size:11px;" title="Cash back in hand (sales + dividends) against the ${sym}${fmt(g.totalInvested,2)} invested">${fmt(g.recoveredPct,0)}% of cost recovered${
+        g.breakEven ? ` · B/E ${sym}${fmt(g.breakEven,2)}` : ''}</span>` : '');
   let priceCell;
-  if (g.px!=null) priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')">${sym}${fmt(g.px,2)}</span>`;
+  if (closed) {
+    // Nothing held → no stake in the market. Show what it sold for, so a price refresh
+    // can't appear to rewrite the exit price of a finished trade.
+    const exitPer = g.soldQty ? g.proceeds/g.soldQty : 0;
+    priceCell = `<span style="color:var(--muted);font-size:12px;" title="Average price this position sold at">sold ${sym}${fmt(exitPer,2)}</span>`;
+  }
+  else if (g.px!=null) priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')">${sym}${fmt(g.px,2)}</span>`;
   else priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')" style="color:var(--muted);font-size:11px;">click / refresh</span>`;
+  const cashedOut = partSold && g.cashBack>0.005
+    ? `<span style="display:block;color:var(--muted);font-size:11px;" title="Sale proceeds${g.dividends>0.005?' + dividends':''} already in hand">+${sym}${fmt(g.cashBack,2)} cashed out</span>` : '';
   const valCell = closed ? '<span class="neutral">—</span>'
-    : g.marketValue!=null ? `${sym}${fmt(g.marketValue,2)}${g.ccy!==S.baseCcy?` <span style="color:var(--muted);font-size:11px;">${ccySym(S.baseCcy)}${fmt(toBase(g.marketValue,g.ccy),2)}</span>`:''}` : '<span class="neutral">—</span>';
+    : g.marketValue!=null ? `${sym}${fmt(g.marketValue,2)}${g.ccy!==S.baseCcy?` <span style="color:var(--muted);font-size:11px;">${ccySym(S.baseCcy)}${fmt(toBase(g.marketValue,g.ccy),2)}</span>`:''}${cashedOut}` : `<span class="neutral">—</span>${cashedOut}`;
   // P&L cell: main figure + sub lines (realized/div, then total% · annualised)
   const subBits=[];
   if (Math.abs(g.realized)>0.005) subBits.push(`${g.realized>=0?'+':'-'}${sym}${fmt(Math.abs(g.realized),2)} real`);
@@ -3896,6 +3916,16 @@ function stockRowHtml(g) {
   if (closed) {
     const tot=g.realized+g.dividends;
     pnlCellH=`<span class="${tot>=0?'positive':'negative'}">${tot>=0?'+':'-'}${sym}${fmt(Math.abs(tot),2)}</span> <span style="font-size:11px;color:var(--muted);">realised</span>${sub}`;
+  } else if (partSold && g.unrealized!=null) {
+    // Once part of a holding is sold, the honest headline is the trade's outcome so far —
+    // open + realized + dividends, against everything invested — not the open leg alone.
+    const t=g.totalPnl, pct=g.totalPnlPct;
+    pnlCellH=`<span class="${t>=0?'positive':'negative'}">${t>=0?'+':'-'}${sym}${fmt(Math.abs(t),2)}</span>`
+      + (pct!=null?` <span style="font-size:11px;">(${t>=0?'+':''}${fmt(pct,1)}%)</span>`:'')
+      + `<span style="display:block;color:var(--muted);font-size:11px;" title="Total on ${sym}${fmt(g.totalInvested,2)} invested">`
+      + `${g.unrealized>=0?'+':'-'}${sym}${fmt(Math.abs(g.unrealized),2)} open · ${g.realized>=0?'+':'-'}${sym}${fmt(Math.abs(g.realized),2)} real`
+      + (g.dividends>0.005?` · +${sym}${fmt(g.dividends,2)} div`:'') + `</span>`
+      + (g.annual!=null?`<span style="display:block;color:var(--muted);font-size:11px;">${g.annual>=0?'+':''}${fmt(g.annual*100,1)}%/yr</span>`:'');
   } else if (g.unrealized!=null) {
     const pct=g.remainingCost?g.unrealized/g.remainingCost*100:null;
     pnlCellH=`<span class="${g.unrealized>=0?'positive':'negative'}">${g.unrealized>=0?'+':'-'}${sym}${fmt(Math.abs(g.unrealized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${g.unrealized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}${sub}`;
@@ -3952,7 +3982,10 @@ function stockDetailRows(g, sym) {
   const sells = g.sells.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
   for (const s of sells) {
     const sh=_sn(s.shares), pr=_sn(s.price), fee=_sn(s.fees);
-    const proceeds=sh*pr-fee, basis=g.avgCost*sh, realized=proceeds-basis;
+    // Basis frozen onto the sale when it happened — not today's average, which a later
+    // purchase would have moved (see stampSaleBasis).
+    const basis = (s.basis!=null) ? _sn(s.basis) : g.avgCost*sh;
+    const proceeds=sh*pr-fee, realized=proceeds-basis;
     const pct = basis ? realized/basis*100 : null;
     const rcls = realized>=0?'positive':'negative', rsgn = realized>=0?'+':'-';
     rows.push(`<tr class="lot-row sell-row">
