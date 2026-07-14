@@ -783,7 +783,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
       <input type="text" id="sell-notes" placeholder="e.g. took profits, stop loss…">
     </div>
     <div style="display:flex;gap:10px;margin-top:4px;">
-      <button class="btn btn-primary" onclick="submitSell()">Confirm Sale</button>
+      <button class="btn btn-primary" id="sell-submit-btn" onclick="submitSell()">Confirm Sale</button>
       <button class="btn btn-secondary" onclick="closeSellModal()">Cancel</button>
     </div>
   </div>
@@ -2330,7 +2330,10 @@ function sellRowHtml(s, m) {
     <td style="color:var(--muted);font-size:12px;">${priceTd}</td>
     <td style="font-size:13px;color:var(--muted);">${valueTd}</td>
     <td><span class="${cls}">${sign}$${fmt(Math.abs(realized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>`:''}</td>
-    <td><div class="trade-actions"><button class="action-btn del" title="Undo this sale" onclick="delTrade('${s.id}')">×</button></div></td>
+    <td><div class="trade-actions">
+      <button class="action-btn" title="Correct this sale — quantity, proceeds, date" onclick="editSale('${s.id}')">Edit</button>
+      <button class="action-btn del" title="Undo this sale" onclick="delTrade('${s.id}')">×</button>
+    </div></td>
   </tr>`;
 }
 
@@ -2946,8 +2949,10 @@ function clearPrice(id) {
 
 // ─── SELL MODAL ────────────────────────────────────────────
 let _sellKey = null;
+let _editSellId = null;      // set when the modal is correcting an existing sale
 
 function openSellModal(buyId) {
+  _editSellId = null;
   const buy = S.trades.find(x => x.id===buyId);
   if (!buy) return;
   _sellKey = groupKey(buy);
@@ -2984,6 +2989,51 @@ function openSellModal(buyId) {
   document.getElementById('sell-notes').value = '';
   document.getElementById('sell-parsed-result').style.display = 'none';
   document.getElementById('sell-fetch-status').textContent = '';
+  document.getElementById('sell-submit-btn').textContent = 'Confirm Sale';
+
+  document.getElementById('sell-modal').style.display = 'flex';
+}
+
+// Correct a sale already recorded — wrong quantity, wrong proceeds, wrong date.
+// Reuses the sell modal, but saves back onto the existing record instead of adding
+// a new one. The quantity cap includes this sale's own shares, since they are about
+// to be released back into the position.
+function editSale(sellId) {
+  const s = S.trades.find(x => x.id===sellId && isSell(x));
+  if (!s) return;
+  _sellKey = groupKey(s);
+  const g = groupByKey(_sellKey);
+  if (!g.buys.length) return;
+  const m = positionMetrics(g);
+  const t0 = m.t0, isNft = m.isNft;
+  _editSellId = sellId;
+
+  const maxQty = m.remainingQty + (s.sell.qty || 0);
+
+  document.getElementById('sell-modal-title').textContent = `Edit sale: ${t0.asset.name}`;
+  document.getElementById('sell-modal-summary').innerHTML =
+    `<strong>Correcting the sale of ${fmtDate(s.date)}</strong><br>` +
+    `<strong>Recorded:</strong> ${fmtAmt(s.sell.qty, isNft?'nft':'coin')} for ${fmt(s.sell.proceeds,6)} ${s.sell.ccy} ` +
+    `(≈ $${fmt(s.sell.proceedsUsd||0,2)})<br>` +
+    `<strong>Cost basis:</strong> $${fmt(m.basisOf(s),2)} — recalculated if you change the quantity`;
+
+  const qtyEl = document.getElementById('sell-qty');
+  qtyEl.value = s.sell.qty;
+  qtyEl.max = maxQty;
+  qtyEl.step = isNft ? '1' : '0.000001';
+  document.getElementById('sell-qty-label').textContent = `Quantity Sold (max ${fmtAmt(maxQty, isNft?'nft':'coin')})`;
+  document.getElementById('sell-qty-hint').textContent = 'Changing this releases the difference back into your open holdings.';
+
+  document.getElementById('sell-ccy').value = s.sell.ccy || 'USD';
+  updateSellRateRow();
+  document.getElementById('sell-proceeds').value = s.sell.proceeds;
+  document.getElementById('sell-rate').value = s.sell.rate || '';
+  document.getElementById('sell-date').value = (s.date || '').slice(0,10);
+  document.getElementById('sell-tx-input').value = s.txHash || '';
+  document.getElementById('sell-notes').value = s.notes || '';
+  document.getElementById('sell-parsed-result').style.display = 'none';
+  document.getElementById('sell-fetch-status').textContent = '';
+  document.getElementById('sell-submit-btn').textContent = 'Save Changes';
 
   document.getElementById('sell-modal').style.display = 'flex';
 }
@@ -3008,6 +3058,7 @@ function closeSellModal() {
   document.getElementById('sell-fetch-status').textContent = '';
   document.getElementById('sell-tx-input').value = '';
   _sellKey = null;
+  _editSellId = null;
 }
 
 // ─── FETCH SELL TX ─────────────────────────────────────────
@@ -3258,9 +3309,15 @@ async function submitSell() {
   const m = positionMetrics(g);
   const t0 = m.t0, isNft = m.isNft;
 
+  // When correcting an existing sale, its own shares go back into the pot before the
+  // cap is checked — otherwise raising the quantity of a sale that took everything
+  // would be rejected against a holding of zero.
+  const editing = _editSellId ? S.trades.find(x => x.id===_editSellId && isSell(x)) : null;
+  const maxQty = m.remainingQty + (editing ? (editing.sell.qty || 0) : 0);
+
   let qty = parseFloat(document.getElementById('sell-qty').value);
   if (isNaN(qty) || qty <= 0) { toast('Enter how many to sell.'); return; }
-  if (qty > m.remainingQty + 1e-9) { toast(`You only hold ${fmtAmt(m.remainingQty, isNft?'nft':'coin')}.`); return; }
+  if (qty > maxQty + 1e-9) { toast(`You only hold ${fmtAmt(maxQty, isNft?'nft':'coin')}.`); return; }
   if (isNft) qty = Math.round(qty);
 
   const proceeds = parseFloat(document.getElementById('sell-proceeds').value);
@@ -3279,30 +3336,45 @@ async function submitSell() {
     proceedsUsd = proceeds * r;
   }
 
-  // Freeze the cost basis into the sale. A sale is a finished event: what these coins
-  // cost is known now and must never move again. If it were re-derived later from the
-  // average of all buys, a purchase made AFTER this sale would silently rewrite the
-  // profit on it — a win can turn into a loss with nothing about the sale having changed.
-  const basisUsd = m.avgCostUsd * qty;
+  const txHash = document.getElementById('sell-tx-input').value.trim() || null;
+  const notes  = document.getElementById('sell-notes').value.trim();
+  const date   = dateVal ? new Date(dateVal).toISOString() : new Date().toISOString();
 
-  S.trades.push({
-    id: Date.now()+'', _m: Date.now(), kind:'sell',
-    chain: t0.chain, type: t0.type,
-    date: dateVal ? new Date(dateVal).toISOString() : new Date().toISOString(),
-    txHash: document.getElementById('sell-tx-input').value.trim() || null,
-    notes:  document.getElementById('sell-notes').value.trim(),
-    asset: { name:t0.asset.name, symbol:t0.asset.symbol, contract:t0.asset.contract, tokenId:t0.asset.tokenId||null },
-    sell: { qty, proceeds, ccy, rate: rate || null, proceedsUsd,
-            basisUsd, avgCostUsd: m.avgCostUsd }
-  });
+  if (editing) {
+    // A correction, not a new event. The old basis was frozen against the old quantity
+    // and date, so it is dropped and re-derived by replaying the position's history —
+    // giving the average as it stood at the (possibly corrected) moment of the sale.
+    editing.date = date;
+    editing.txHash = txHash;
+    editing.notes = notes;
+    editing.sell = { qty, proceeds, ccy, rate: rate || null, proceedsUsd };
+    touch(editing);
+    stampSaleBasis();
+  } else {
+    // Freeze the cost basis into the sale. A sale is a finished event: what these coins
+    // cost is known now and must never move again. If it were re-derived later from the
+    // average of all buys, a purchase made AFTER this sale would silently rewrite the
+    // profit on it — a win can turn into a loss with nothing about the sale having changed.
+    S.trades.push({
+      id: Date.now()+'', _m: Date.now(), kind:'sell',
+      chain: t0.chain, type: t0.type, date, txHash, notes,
+      asset: { name:t0.asset.name, symbol:t0.asset.symbol, contract:t0.asset.contract, tokenId:t0.asset.tokenId||null },
+      sell: { qty, proceeds, ccy, rate: rate || null, proceedsUsd,
+              basisUsd: m.avgCostUsd * qty, avgCostUsd: m.avgCostUsd }
+    });
+  }
 
   expandedGroups.add(_sellKey);          // reveal the new sale line under the position
   persist();
   closeSellModal();
   renderPortfolio();
 
+  // Read the basis back off the record — on an edit it was just re-derived by replay.
+  const basisUsd = editing ? (editing.sell.basisUsd || 0) : (m.avgCostUsd * qty);
   const realized = proceedsUsd - basisUsd;
-  toast(`Sold ${fmtAmt(qty, isNft?'nft':'coin')} ${t0.asset.name} — realized ${realized>=0?'+':'-'}$${fmt(Math.abs(realized),2)} ✓`);
+  const verb = editing ? 'Sale updated —' : `Sold ${fmtAmt(qty, isNft?'nft':'coin')} ${t0.asset.name} —`;
+  _editSellId = null;
+  toast(`${verb} realized ${realized>=0?'+':'-'}$${fmt(Math.abs(realized),2)} ✓`);
 }
 
 // Open a recorded sale's transaction in the chain explorer.
