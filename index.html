@@ -919,8 +919,16 @@ function positionMetrics(g) {
   const avgCostUsd  = totalBought ? totalInvUsd/totalBought : 0;     // per coin / per NFT
   const soldQty     = sells.reduce((s,x)=>s+(x.sell.qty||0),0);
   const remainingQty = Math.max(0, totalBought - soldQty);
-  const remainingCostUsd = avgCostUsd * remainingQty;
-  const realizedUsd = sells.reduce((s,x)=>s+((x.sell.proceedsUsd||0) - avgCostUsd*(x.sell.qty||0)),0);
+
+  // Each sale carries the cost basis frozen at the moment it happened (sell.basisUsd).
+  // Sales recorded before that was stored fall back to today's average — the old
+  // behaviour — so existing history keeps the numbers it has always shown.
+  const basisOf = x => (x.sell.basisUsd != null) ? x.sell.basisUsd : avgCostUsd*(x.sell.qty||0);
+  const soldBasisUsd = sells.reduce((s,x)=>s+basisOf(x),0);
+  const realizedUsd  = sells.reduce((s,x)=>s+((x.sell.proceedsUsd||0) - basisOf(x)),0);
+  // What's left in the pool is what went in, minus what the sold coins took out of it.
+  // This keeps the books balanced: total P&L = value held + cash out − cash in.
+  const remainingCostUsd = remainingQty > 0 ? Math.max(0, totalInvUsd - soldBasisUsd) : 0;
   const totNoFee = buys.reduce((s,b)=>s+(b.entry.noFee||0),0);
   const totWith  = buys.reduce((s,b)=>s+(b.entry.withFee||0),0);
   const priceLot = buys.find(b=>b.priceLive!==null);
@@ -931,9 +939,31 @@ function positionMetrics(g) {
     else openValueUsd = livePrice*remainingQty;
   }
   const unrealizedUsd = openValueUsd != null ? openValueUsd - remainingCostUsd : null;
+
+  // ── Partial-sale extras ──
+  // proceedsUsd  : cash actually taken back out of the position
+  // totalPnlUsd  : the real outcome of the trade so far = realized + unrealized
+  // totalPctm    : that outcome measured against everything put in (not just what's left)
+  // remainFrac   : share of the position still held — each buy lot is shown pro-rata to
+  //                this, so the lot rows sum to the position instead of double-counting
+  //                the coins that have already been sold
+  // breakEvenUsd : price the remaining coins must reach to get all the capital back
+  const proceedsUsd = sells.reduce((s,x)=>s+(x.sell.proceedsUsd||0),0);
+  const totalPnlUsd = realizedUsd + (unrealizedUsd || 0);
+  const totalPct    = totalInvUsd ? (totalPnlUsd/totalInvUsd)*100 : null;
+  const remainFrac  = totalBought ? remainingQty/totalBought : 0;
+  const stillOutUsd = Math.max(0, totalInvUsd - proceedsUsd);        // capital not yet recovered
+  const recoveredPct = totalInvUsd ? Math.min(100, (proceedsUsd/totalInvUsd)*100) : 0;
+  const breakEvenUsd = remainingQty ? stillOutUsd/remainingQty : null;
+  // Share of the original outlay still riding. Identical to remainFrac unless a buy was
+  // made after a sale (the sold coins then left at an older, cheaper average) — scaling
+  // the lot rows' cost by this keeps them summing to the position's remaining basis.
+  const remainCostFrac = totalInvUsd ? remainingCostUsd/totalInvUsd : remainFrac;
+
   return { isNft, t0, count:buys.length, totalBought, totalInvUsd, avgCostUsd, soldQty,
-    remainingQty, remainingCostUsd, realizedUsd, totNoFee, totWith, livePrice,
-    openValueUsd, openValueEth, unrealizedUsd, ccy:t0.entry.ccy };
+    remainingQty, remainingCostUsd, realizedUsd, soldBasisUsd, totNoFee, totWith, livePrice,
+    openValueUsd, openValueEth, unrealizedUsd, ccy:t0.entry.ccy, basisOf,
+    proceedsUsd, totalPnlUsd, totalPct, remainFrac, remainCostFrac, stillOutUsd, recoveredPct, breakEvenUsd };
 }
 
 // ─── PERSIST ───────────────────────────────────────────────
@@ -2028,7 +2058,20 @@ function entryTds(t) {
     + `<td style="font-size:12px;">${fmt(t.entry.withFee,5)} ${t.entry.ccy}</td>`;
 }
 
-function rowHtml(t, isLot=false, soldOut=false) {
+// `frac` < 1 means part of this position has been sold. Under average-cost accounting
+// the sale comes out of the blended pool, not out of one particular buy — so every buy
+// is shown pro-rata: the same share of it remains, and its value and P&L are scaled to
+// that share. Without this the lot rows would each still show their full original size,
+// double-counting the coins already booked into realized P&L.
+function rowHtml(t, isLot=false, soldOut=false, frac=1, costFrac=null) {
+  const orig = t;
+  const cf = costFrac == null ? frac : costFrac;   // cost scales with the basis left in the pool
+  if (frac < 1) {
+    t = { ...t,
+      asset: { ...t.asset, amount:(t.asset.amount||0)*frac },
+      entry: { ...t.entry, noFee:(t.entry.noFee||0)*cf, fee:(t.entry.fee||0)*cf,
+               withFee:(t.entry.withFee||0)*cf } };
+  }
   const ch = CHAINS[t.chain] || { name:t.chain, color:'#888' };
   const closed = t.status === 'closed';
   const txLink = t.txHash ? `<a onclick="openTx('${t.id}')" style="cursor:pointer">tx ↗</a>` : 'manual';
@@ -2074,7 +2117,8 @@ function rowHtml(t, isLot=false, soldOut=false) {
       <span class="chain-badge chain-${t.chain}">${ch.name}</span>
       <span class="type-badge type-${t.type}">${t.type.toUpperCase()}</span>
     </td>
-    <td style="color:var(--muted);font-size:12px;">${fmtAmt(t.asset.amount,t.type)}</td>
+    <td style="color:var(--muted);font-size:12px;">${fmtAmt(t.asset.amount,t.type)}${frac<1
+      ? `<span style="display:block;font-size:11px;">of ${fmtAmt(orig.asset.amount,orig.type)} · ${fmt(frac*100,0)}% left</span>` : ''}</td>
     ${entryTds(t)}
     <td>${priceCell}</td>
     <td style="font-size:13px;">${soldOut ? '<span class="neutral">sold</span>' : currentValueCell(t)}</td>
@@ -2095,9 +2139,15 @@ function positionHtml(i, m) {
   const partial = m.soldQty > 0;
   const fullySold = partial && m.remainingQty <= 0;   // every coin exited — show "SOLD", not "PART. SOLD"
 
-  // ── Amount (remaining), with "sold X of Y" when partially exited ──
+  // ── Amount (remaining), with "sold X of Y" + how much capital is back when partially exited ──
+  const soldTxt = isNft ? `${fmt(m.soldQty,0)} of ${fmt(m.totalBought,0)}`
+                        : `${fmtAmt(m.soldQty,'coin')} of ${fmtAmt(m.totalBought,'coin')}`;
+  const recoveredTxt = (partial && !fullySold && m.totalInvUsd)
+    ? `<span style="display:block;color:var(--muted);font-size:11px;" title="Cash taken back out, against the $${fmt(m.totalInvUsd,2)} you put in">${fmt(m.recoveredPct,0)}% of cost recovered${
+        m.breakEvenUsd ? ` · B/E $${fmt(m.breakEvenUsd, m.breakEvenUsd<0.001?8:4)}` : ''}</span>` : '';
   const amtCell = (isNft ? `${fmt(m.remainingQty,0)} NFTs` : fmtAmt(m.remainingQty,'coin'))
-    + (partial ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${fmtAmt(m.soldQty,isNft?'nft':'coin')} of ${fmtAmt(m.totalBought,isNft?'nft':'coin')}</span>` : '');
+    + (partial ? `<span style="display:block;color:var(--muted);font-size:11px;">sold ${soldTxt}</span>` : '')
+    + recoveredTxt;
 
   // ── Average entry cells ──
   let entryNoFeeTd, entryWithFeeTd;
@@ -2147,12 +2197,25 @@ function positionHtml(i, m) {
     const es = ethPnl>=0?'+':'-', ecls = ethPnl>=0?'positive':'negative';
     const usdSubTxt = m.unrealizedUsd!=null?` <span style="color:var(--muted);font-size:11px;">${m.unrealizedUsd>=0?'+':'-'}$${fmt(Math.abs(m.unrealizedUsd),2)}</span>`:'';
     pnlHtml = `<span class="${ecls}">${es}${fmt(Math.abs(ethPnl),4)} ${natCcy(t0)}</span>${usdSubTxt}${realizedSub}`;
+  } else if (partial) {
+    // Part-sold: the headline is the TRADE's outcome so far — realized + unrealized,
+    // measured against everything invested (not just the basis still riding). Open and
+    // realized are broken out underneath so it's clear where the number comes from.
+    valueCell = `$${fmt(m.openValueUsd,2)}`
+      + `<span style="display:block;color:var(--muted);font-size:11px;" title="Proceeds already taken out">+$${fmt(m.proceedsUsd,2)} cashed out</span>`;
+    const pnl = m.totalPnlUsd, pct = m.totalPct;
+    const cls = pnl>=0?'positive':'negative', sign = pnl>=0?'+':'-';
+    const pctStr = pct!=null?` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>`:'';
+    const u = m.unrealizedUsd || 0;
+    pnlHtml = `<span class="${cls}">${sign}$${fmt(Math.abs(pnl),2)}</span>${pctStr}`
+      + `<span style="display:block;font-size:11px;color:var(--muted);" title="Total on $${fmt(m.totalInvUsd,2)} invested">`
+      + `${u>=0?'+':'-'}$${fmt(Math.abs(u),2)} open · ${m.realizedUsd>=0?'+':'-'}$${fmt(Math.abs(m.realizedUsd),2)} realized</span>`;
   } else {
     valueCell = `$${fmt(m.openValueUsd,2)}`;
     const pnl = m.unrealizedUsd, pct = m.remainingCostUsd ? pnl/m.remainingCostUsd*100 : null;
     const cls = pnl>=0?'positive':'negative', sign = pnl>=0?'+':'-';
     const pctStr = pct!=null?` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>`:'';
-    pnlHtml = `<span class="${cls}">${sign}$${fmt(Math.abs(pnl),2)}</span>${pctStr}${realizedSub}`;
+    pnlHtml = `<span class="${cls}">${sign}$${fmt(Math.abs(pnl),2)}</span>${pctStr}`;
   }
 
   const subText = partial
@@ -2189,7 +2252,24 @@ function positionHtml(i, m) {
 
   let detail = '';
   if (expanded) {
-    detail = g.buys.map(b => rowHtml(b, true, m.remainingQty <= 0)).join('')
+    // Coins are fungible → show every buy pro-rata to what's left of the position.
+    // NFTs are not divisible, so a half-shown NFT would be nonsense: consume whole
+    // lots oldest-first instead and mark the ones that are gone.
+    let lots;
+    if (isNft) {
+      const order = g.buys.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
+      let toSell = m.soldQty;
+      lots = order.map(b => {
+        const q = b.asset.amount || 1;
+        const gone = toSell >= q;
+        if (gone) toSell -= q;
+        return rowHtml(b, true, gone);
+      });
+    } else {
+      lots = g.buys.map(b => rowHtml(b, true, m.remainingQty <= 0,
+        m.remainingQty > 0 ? m.remainFrac : 1, m.remainingQty > 0 ? m.remainCostFrac : 1));
+    }
+    detail = lots.join('')
            + g.sells.slice().sort((a,b)=>new Date(a.date)-new Date(b.date)).map(s => sellRowHtml(s, m)).join('');
   }
   return summary + detail;
@@ -2199,7 +2279,7 @@ function positionHtml(i, m) {
 function sellRowHtml(s, m) {
   const ch = CHAINS[s.chain] || { name:s.chain, color:'#888' };
   const q = s.sell.qty, pUsd = s.sell.proceedsUsd || 0;
-  const basis = m.avgCostUsd * q;
+  const basis = m.basisOf(s);          // frozen at the sale (legacy sales fall back to today's average)
   const realized = pUsd - basis;
   const pricePer = q ? pUsd/q : 0;
   const cls = realized>=0?'positive':'negative', sign = realized>=0?'+':'-';
@@ -2249,7 +2329,7 @@ async function openShareModal(i) {
   const g = _groups[i]; if (!g) return;
   const m  = positionMetrics(g);
   const t0 = m.t0;
-  const soldBasis = m.avgCostUsd * m.soldQty;      // USD cost of the portion sold
+  const soldBasis = m.soldBasisUsd;                // USD cost of the portion sold, as booked at each sale
   const roi = soldBasis ? m.realizedUsd / soldBasis * 100 : null;
   const ch  = CHAINS[t0.chain] || { color:'#888', name:t0.chain };
   const logo = await loadCorsImg(imgFor((t0.asset.contract || '').toLowerCase()));
@@ -3171,6 +3251,12 @@ async function submitSell() {
     proceedsUsd = proceeds * r;
   }
 
+  // Freeze the cost basis into the sale. A sale is a finished event: what these coins
+  // cost is known now and must never move again. If it were re-derived later from the
+  // average of all buys, a purchase made AFTER this sale would silently rewrite the
+  // profit on it — a win can turn into a loss with nothing about the sale having changed.
+  const basisUsd = m.avgCostUsd * qty;
+
   S.trades.push({
     id: Date.now()+'', _m: Date.now(), kind:'sell',
     chain: t0.chain, type: t0.type,
@@ -3178,7 +3264,8 @@ async function submitSell() {
     txHash: document.getElementById('sell-tx-input').value.trim() || null,
     notes:  document.getElementById('sell-notes').value.trim(),
     asset: { name:t0.asset.name, symbol:t0.asset.symbol, contract:t0.asset.contract, tokenId:t0.asset.tokenId||null },
-    sell: { qty, proceeds, ccy, rate: rate || null, proceedsUsd }
+    sell: { qty, proceeds, ccy, rate: rate || null, proceedsUsd,
+            basisUsd, avgCostUsd: m.avgCostUsd }
   });
 
   expandedGroups.add(_sellKey);          // reveal the new sale line under the position
@@ -3186,7 +3273,7 @@ async function submitSell() {
   closeSellModal();
   renderPortfolio();
 
-  const realized = proceedsUsd - m.avgCostUsd*qty;
+  const realized = proceedsUsd - basisUsd;
   toast(`Sold ${fmtAmt(qty, isNft?'nft':'coin')} ${t0.asset.name} — realized ${realized>=0?'+':'-'}$${fmt(Math.abs(realized),2)} ✓`);
 }
 
