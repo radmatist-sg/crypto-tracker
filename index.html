@@ -2301,6 +2301,18 @@ function sellRowHtml(s, m) {
   const cls = realized>=0?'positive':'negative', sign = realized>=0?'+':'-';
   const pct = basis ? realized/basis*100 : null;
   const txLink = s.txHash ? `<a onclick="openSellTx('${s.id}')" style="cursor:pointer">tx ↗</a>` : 'manual';
+
+  // A sale paid in ETH/SOL is shown in that token first with USD underneath — the same
+  // way entries and floors are shown everywhere else. USD alone hides the number the
+  // trade was actually struck at.
+  const native = /^W?(ETH|SOL)$/i.test(s.sell.ccy || '') ? s.sell.ccy.replace(/^W/i,'') : null;
+  const perNative = (native && q) ? (s.sell.proceeds||0)/q : 0;
+  const priceTd = perNative
+    ? `${fmt(perNative,4)} ${native} <span style="font-size:11px;">$${fmt(pricePer, pricePer<0.001?8:4)}</span>`
+    : `$${fmt(pricePer, pricePer<0.001?8:4)}`;
+  const valueTd = native
+    ? `${fmt(s.sell.proceeds||0,4)} ${native} <span style="font-size:11px;">$${fmt(pUsd,2)}</span>`
+    : `$${fmt(pUsd,2)}`;
   return `<tr class="lot-row sell-row">
     <td>
       <div class="asset-cell">
@@ -2315,8 +2327,8 @@ function sellRowHtml(s, m) {
     <td style="color:var(--muted);font-size:12px;">${fmtAmt(q, s.type==='nft'?'nft':'coin')}</td>
     <td style="color:var(--muted);font-size:12px;">—</td>
     <td style="color:var(--muted);font-size:12px;">$${fmt(basis,2)} <span style="font-size:10px;">cost</span></td>
-    <td style="color:var(--muted);font-size:12px;">$${fmt(pricePer, pricePer<0.001?8:4)}</td>
-    <td style="font-size:13px;color:var(--muted);">$${fmt(pUsd,2)}</td>
+    <td style="color:var(--muted);font-size:12px;">${priceTd}</td>
+    <td style="font-size:13px;color:var(--muted);">${valueTd}</td>
     <td><span class="${cls}">${sign}$${fmt(Math.abs(realized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${sign}${fmt(Math.abs(pct),1)}%)</span>`:''}</td>
     <td><div class="trade-actions"><button class="action-btn del" title="Undo this sale" onclick="delTrade('${s.id}')">×</button></div></td>
   </tr>`;
