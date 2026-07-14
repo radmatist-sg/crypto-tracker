@@ -1126,6 +1126,7 @@ async function doPull(announce) {
 
     const changed = JSON.stringify([S.trades, S.stocks, S.tombstones]) !== before;
     S.updatedAt = Date.now();
+    stampSaleBasis();       // a sale synced from another device may not carry its basis yet
     persistLocal();
     renderPortfolio();
     renderStocks();
@@ -3374,7 +3375,7 @@ function importData(e) {
       if (d.fx)      S.fx = { ...S.fx, ...d.fx };
       if (d.acctNames) S.acctNames = d.acctNames;
       if (d.assetImg)  S.assetImg = d.assetImg;
-      persist(); loadState(); renderPortfolio(); renderStocks();
+      persist(); loadState(); stampSaleBasis(); renderPortfolio(); renderStocks();
       toast(`Imported ${(d.trades||[]).length} trades · ${(d.stocks||[]).length} stock records ✓`);
     } catch { toast('Invalid JSON file.'); }
   };
@@ -3524,6 +3525,7 @@ function importStockCsv(ev) {
       if (have.has(stockSig(e2))) continue;
       have.add(stockSig(e2)); S.stocks.push(e2); added++;
     }
+    stampSaleBasis();          // freeze the basis on any imported sales (replayed in date order)
     persist(); renderStocks();
     st.style.color = 'var(--green)';
     const msg = `Imported ${added} new ${broker} record${added===1?'':'s'}${parsed.length-added>0?` (${parsed.length-added} already there)`:''} ✓`;
@@ -3560,7 +3562,7 @@ function addStockManual() {
     if (!amount) { toast('Enter an amount.'); return; }
     Object.assign(e, { ticker: t==='dividend'?ticker:'', name, amount });
   }
-  S.stocks.push(e); persist();
+  S.stocks.push(e); stampSaleBasis(); persist();
   ['st-ticker','st-name','st-shares','st-price','st-fees','st-amount','st-note'].forEach(id=>document.getElementById(id).value='');
   toast('Added ✓'); switchTab('stocks');
 }
@@ -3673,8 +3675,12 @@ function stockMetrics(g) {
   const avgCost=totalBought?totalCost/totalBought:0;
   const soldQty=g.sells.reduce((s,x)=>s+_sn(x.shares),0);
   const remainingQty=Math.max(0,totalBought-soldQty);
-  const remainingCost=avgCost*remainingQty;
-  const realized=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)-avgCost*_sn(x.shares)),0);
+  // Basis frozen onto each sale when it happened (see stampSaleBasis). Sales from
+  // before that existed fall back to today's average — the old behaviour.
+  const basisOf=x=>(x.basis!=null)?_sn(x.basis):avgCost*_sn(x.shares);
+  const soldBasis=g.sells.reduce((s,x)=>s+basisOf(x),0);
+  const remainingCost=remainingQty>0?Math.max(0,totalCost-soldBasis):0;
+  const realized=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)-basisOf(x)),0);
   const dividends=g.divs.reduce((s,d)=>s+_sn(d.amount),0);
   const proceeds=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)),0);
   const px=S.stockPx[g.ticker]?.price ?? null;
@@ -3878,8 +3884,98 @@ function stockDetailRows(g, sym) {
   return rows.join('');
 }
 
+// ─── COST BASIS: FREEZE IT ONTO EVERY SALE ─────────────────
+// A sale is a finished event. What the coins/shares cost is known the moment it
+// happens, so it is written onto the sale and never recomputed. Re-deriving it from
+// the average of all buys means a purchase made AFTER a sale silently rewrites the
+// profit on it — a +$17 win can become a -$18 loss with nothing about the sale
+// having changed.
+//
+// The basis is worked out by replaying each position's events in DATE order and
+// taking the running average at the moment of each sale — not today's average. That
+// is what makes it correct for a broker CSV, where a year of buys and sells lands in
+// one batch, as well as for a sale entered by hand.
+//
+// Only sales MISSING a basis are stamped, so this is safe to run on every load, after
+// an import, or after a sale: it fills gaps and never overwrites a recorded fact.
+function stampSaleBasis() {
+  let stamped = 0;
+
+  // Replay order. Sale dates are often entered as a plain day (midnight) while a buy
+  // carries the block's real timestamp, so on the same day a sale can sort AHEAD of the
+  // purchase it came from — which would replay against an empty pool and book a zero
+  // cost basis (turning a $62 profit into a $162 one). You cannot sell what you have not
+  // bought: within a day, buys always come first.
+  const dayOf = x => (x.date || '').slice(0,10);
+  const inOrder = (evts, isSellFn) => evts.slice().sort((a,b) =>
+    dayOf(a).localeCompare(dayOf(b))
+    || (isSellFn(a) ? 1 : 0) - (isSellFn(b) ? 1 : 0)
+    || new Date(a.date) - new Date(b.date));
+
+  // ── Crypto (S.trades): basis in USD ──
+  const cryptoGroups = new Map();
+  for (const t of S.trades) {
+    if (t.status === 'closed' && t.kind !== 'sell') continue;   // legacy full exits carry their own result
+    const k = groupKey(t);
+    if (!cryptoGroups.has(k)) cryptoGroups.set(k, []);
+    cryptoGroups.get(k).push(t);
+  }
+  for (const evts of cryptoGroups.values()) {
+    // Safety net: if a sale still replays against an empty pool (a buy missing from the
+    // history entirely), fall back to the position's overall average rather than booking
+    // a zero basis, which would report the whole sale as pure profit.
+    const allQty = evts.filter(e=>!isSell(e)).reduce((s,e)=>s+(e.asset.amount||0),0);
+    const allCost = evts.filter(e=>!isSell(e)).reduce((s,e)=>s+(entryUsd(e)||0),0);
+    const fallbackAvg = allQty > 0 ? allCost/allQty : 0;
+    let qty = 0, cost = 0;
+    for (const e of inOrder(evts, isSell)) {
+      if (isSell(e)) {
+        const q = e.sell.qty || 0;
+        const avg = qty > 0 ? cost/qty : fallbackAvg;
+        const basis = avg * q;
+        if (e.sell.basisUsd == null) { e.sell.basisUsd = basis; e.sell.avgCostUsd = avg; touch(e); stamped++; }
+        qty -= q; cost -= (e.sell.basisUsd || 0);
+      } else {
+        qty += (e.asset.amount || 0);
+        cost += (entryUsd(e) || 0);
+      }
+    }
+  }
+
+  // ── Stocks (S.stocks): basis in the position's own currency ──
+  const stockGrp = new Map();
+  for (const e of (S.stocks || [])) {
+    if (e.kind !== 'buy' && e.kind !== 'sell') continue;
+    const k = (e.broker||'other') + '|' + (e.ticker||'').toUpperCase() + '|' + (e.ccy||'USD');
+    if (!stockGrp.has(k)) stockGrp.set(k, []);
+    stockGrp.get(k).push(e);
+  }
+  for (const evts of stockGrp.values()) {
+    const allQty = evts.filter(e=>e.kind!=='sell').reduce((s,e)=>s+_sn(e.shares),0);
+    const allCost = evts.filter(e=>e.kind!=='sell').reduce((s,e)=>s+_sn(e.shares)*_sn(e.price)+_sn(e.fees),0);
+    const fallbackAvg = allQty > 0 ? allCost/allQty : 0;
+    let qty = 0, cost = 0;
+    for (const e of inOrder(evts, x => x.kind === 'sell')) {
+      if (e.kind === 'sell') {
+        const q = _sn(e.shares);
+        const avg = qty > 0 ? cost/qty : fallbackAvg;
+        const basis = avg * q;
+        if (e.basis == null) { e.basis = basis; e.avgCostAt = avg; touch(e); stamped++; }
+        qty -= q; cost -= (e.basis || 0);
+      } else {
+        qty += _sn(e.shares);
+        cost += _sn(e.shares)*_sn(e.price) + _sn(e.fees);   // buy fees are part of what it cost
+      }
+    }
+  }
+
+  if (stamped) persist();
+  return stamped;
+}
+
 // ─── INIT ──────────────────────────────────────────────────
 loadState();
+stampSaleBasis();
 applyPrivacy();
 updateStockForm();
 renderPortfolio();
