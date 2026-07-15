@@ -201,6 +201,10 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .sold-badge { display:inline-flex;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;background:rgba(255,77,77,.15);color:var(--red);margin-left:6px;letter-spacing:.5px; }
 .sell-row td { background: rgba(255,77,77,.06); }
 .sell-row td:first-child { border-left: 3px solid rgba(255,77,77,.4); }
+.pending-row td { background: rgba(0,0,0,.18); }
+.ord-pill { display:inline-flex;align-items:center;gap:2px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;margin-right:5px;white-space:nowrap; }
+.ord-tp { background:rgba(52,199,89,.14);color:var(--green); }
+.ord-sl { background:rgba(255,77,77,.14);color:var(--red); }
 
 @media (max-width: 768px) {
   body { font-size: 15px; }
@@ -846,7 +850,8 @@ let S = { trades:[], wallets:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'
   sync:{url:'',key:'',code:''}, updatedAt:0, tombstones:{},
   stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 },     // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
   acctNames:{}, stockFilter:'all',                            // custom portfolio labels per broker; current stocks filter (runtime)
-  assetImg:{}, view:'current' };                              // cached logos; summary view 'current' (open holdings) vs 'alltime'
+  assetImg:{}, view:'current',                                // cached logos; summary view 'current' (open holdings) vs 'alltime'
+  pendingOrders:[] };                                          // live broker TP/SL (exit) orders, mirrored from the moomoo CSV on import
 
 // My wallets — the addresses Zul mints/buys/sells from. Used to identify "me" in a
 // transaction even when a bot/relayer paid the gas (so the fee-payer ≠ the owner).
@@ -985,6 +990,7 @@ function loadState() {
     if (d.assetImg) S.assetImg = d.assetImg;
     if (d.view) S.view = d.view;
     if (d.tombstones) S.tombstones = d.tombstones;
+    if (Array.isArray(d.pendingOrders)) S.pendingOrders = d.pendingOrders;
   } catch {}
   migrateStamps();
   document.getElementById('k-eth').value    = S.keys.eth    || '';
@@ -999,7 +1005,7 @@ function loadState() {
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
   localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, wallets: S.wallets, keys: S.keys, ethUsd: S.ethUsd, solUsd: S.solUsd, sync: S.sync, updatedAt: S.updatedAt,
-    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view, tombstones: S.tombstones }));
+    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view, tombstones: S.tombstones, pendingOrders: S.pendingOrders }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
 function persist() {
@@ -1070,7 +1076,7 @@ async function pullRemote() {
 async function pushRemote() {
   const { error } = await sb.from('portfolios').upsert(
     { user_id: _user.id, data: { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, solUsd:S.solUsd, updatedAt:S.updatedAt,
-        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, tombstones:S.tombstones }, updated_at: new Date().toISOString() },
+        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, tombstones:S.tombstones, pendingOrders:S.pendingOrders }, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' });
   if (error) throw error;
 }
@@ -1122,6 +1128,7 @@ async function doPull(announce) {
       if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
       if (remote.acctNames) S.acctNames = remote.acctNames;
       if (remote.assetImg)  S.assetImg = remote.assetImg;
+      if (Array.isArray(remote.pendingOrders)) S.pendingOrders = remote.pendingOrders;  // live-state mirror; newest writer's set wins
     }
 
     const changed = JSON.stringify([S.trades, S.stocks, S.tombstones]) !== before;
@@ -3449,7 +3456,7 @@ async function testJupiter() {
 // ─── DATA ──────────────────────────────────────────────────
 function exportData() {
   const payload = { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, solUsd:S.solUsd, stocks:S.stocks, stockPx:S.stockPx,
-    baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg };
+    baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, pendingOrders:S.pendingOrders };
   const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
   const a = Object.assign(document.createElement('a'),{
     href:URL.createObjectURL(blob),
@@ -3474,6 +3481,7 @@ function importData(e) {
       if (d.fx)      S.fx = { ...S.fx, ...d.fx };
       if (d.acctNames) S.acctNames = d.acctNames;
       if (d.assetImg)  S.assetImg = d.assetImg;
+      if (Array.isArray(d.pendingOrders)) S.pendingOrders = d.pendingOrders;
       persist(); loadState(); stampSaleBasis(); renderPortfolio(); renderStocks();
       toast(`Imported ${(d.trades||[]).length} trades · ${(d.stocks||[]).length} stock records ✓`);
     } catch { toast('Invalid JSON file.'); }
@@ -3549,14 +3557,44 @@ function detectBroker(text) {
   if (/"?Side"?,\s*"?Symbol"?,\s*"?Name"?,\s*"?Order Price"?/.test(text)) return 'moomoo';
   return null;
 }
-// moomoo: only "Filled" rows; columns are positional (header has duplicate names).
+// moomoo header map: match columns BY NAME, not position — moomoo has reordered/added
+// columns across export versions (e.g. a leading "Status" column + "Order Source"),
+// which broke the old positional parser. Duplicate names ("Currency"/"Markets" appear
+// twice) → keep the FIRST occurrence (the order-level currency).
+function moomooCols(rows) {
+  const col={}; (rows[0]||[]).forEach((h,i)=>{ const k=(h||'').trim(); if (k && !(k in col)) col[k]=i; });
+  return col;
+}
+// moomoo: only "Filled" rows become trades. Header-named so it survives column reshuffles.
 function parseMoomoo(text) {
-  const rows=parseCSV(text), out=[];
-  for (let r=1; r<rows.length; r++) { const c=rows[r];
-    if (c.length<25 || c[6]!=='Filled') continue;
-    const qty=_sn(c[18]), price=_sn(c[19]); if (!qty||!price) continue;
-    out.push({ broker:'moomoo', kind:c[0]==='Sell'?'sell':'buy', ticker:c[1], name:c[2], shares:qty, price,
-      fees:_sn(c[c.length-1]), ccy:c[23]||c[16]||'USD', date:toISODate((c[21]||'').replace(' ET','')) });
+  const rows=parseCSV(text), col=moomooCols(rows), out=[];
+  const g=(c,name)=> col[name]!=null ? c[col[name]] : '';
+  for (let r=1; r<rows.length; r++) { const c=rows[r]; if (!c || !c.length) continue;
+    if (g(c,'Status')!=='Filled') continue;
+    const qty=_sn(g(c,'Fill Qty'))||_sn(g(c,'Order Qty')), price=_sn(g(c,'Fill Price'))||_sn(g(c,'Order Price')); if (!qty||!price) continue;
+    out.push({ broker:'moomoo', kind:g(c,'Side')==='Sell'?'sell':'buy', ticker:g(c,'Symbol'), name:g(c,'Name'), shares:qty, price,
+      fees:0, ccy:g(c,'Currency')||'USD', date:toISODate((g(c,'Fill Time')||g(c,'Order Time')||'').replace(' ET','')) });  // this export carries no commission column → fee 0 (moomoo US is commission-free)
+  }
+  return out;
+}
+// moomoo PENDING exit orders on open positions: a Sell Limit = take-profit (TP),
+// a Sell Stop = stop-loss (SL, price is in the "Trigger price" column). These mirror
+// LIVE broker state, so the importer REPLACES moomoo's whole pending set each time —
+// a cancelled/filled order simply isn't in the new file. A position may hold several
+// (scaling out = two TP limits), so they're a list per ticker, never a single slot.
+function parseMoomooPending(text) {
+  const rows=parseCSV(text), col=moomooCols(rows), out=[];
+  const g=(c,name)=> col[name]!=null ? c[col[name]] : '';
+  for (let r=1; r<rows.length; r++) { const c=rows[r]; if (!c || !c.length) continue;
+    if (!/Queued|Working|Submitted|Pending|Accepted|Partially/i.test(g(c,'Status')||'')) continue;  // not yet fully filled = live order
+    if (g(c,'Side')!=='Sell') continue;                        // only exit (sell) orders become TP/SL
+    const isStop=/stop/i.test(g(c,'Order Type')||'');
+    const qty=_sn(g(c,'Order Qty'));
+    const price=isStop ? _sn(g(c,'Trigger price')) : _sn(g(c,'Order Price'));
+    if (!qty || !price) continue;
+    out.push({ broker:'moomoo', ticker:(g(c,'Symbol')||'').toUpperCase(), ccy:g(c,'Currency')||'USD',
+      kind:isStop?'sl':'tp', otype:isStop?'stop':'limit', price, qty, status:g(c,'Status'),
+      time:toISODate((g(c,'Order Time')||'').replace(' ET','')) });
   }
   return out;
 }
@@ -3624,10 +3662,18 @@ function importStockCsv(ev) {
       if (have.has(stockSig(e2))) continue;
       have.add(stockSig(e2)); S.stocks.push(e2); added++;
     }
+    // Pending TP/SL orders mirror live broker state → REPLACE moomoo's whole set
+    // (an order missing from this file was cancelled or filled and must disappear).
+    let pendMsg='';
+    if (broker==='moomoo') {
+      const pend = parseMoomooPending(text);
+      S.pendingOrders = (S.pendingOrders||[]).filter(o=>o.broker!=='moomoo').concat(pend);
+      if (pend.length) pendMsg = ` · ${pend.length} TP/SL order${pend.length===1?'':'s'}`;
+    }
     stampSaleBasis();          // freeze the basis on any imported sales (replayed in date order)
     persist(); renderStocks();
     st.style.color = 'var(--green)';
-    const msg = `Imported ${added} new ${broker} record${added===1?'':'s'}${parsed.length-added>0?` (${parsed.length-added} already there)`:''} ✓`;
+    const msg = `Imported ${added} new ${broker} record${added===1?'':'s'}${parsed.length-added>0?` (${parsed.length-added} already there)`:''}${pendMsg} ✓`;
     st.textContent = msg; toast(msg);
     ev.target.value='';
   };
@@ -3959,7 +4005,34 @@ function stockRowHtml(g) {
   </tr>`;
   let detail = '';
   if (expanded) detail = stockDetailRows(g, sym);
-  return summary + detail;
+  return summary + pendingRowHtml(g, sym) + detail;
+}
+// A full-width line under an open position showing its live TP/SL exit orders,
+// each with distance-from-price %, plus aggregate risk / reward / R:R.
+function pendingRowHtml(g, sym) {
+  if (g.remainingQty<=0) return '';
+  const pend = (S.pendingOrders||[]).filter(o=>o.broker===g.broker && o.ticker===g.ticker && (o.ccy||'USD')===g.ccy);
+  if (!pend.length) return '';
+  const px=g.px, avg=g.avgCost, qty=g.remainingQty;
+  const dist = p => px!=null ? (p-px)/px*100 : null;
+  const pill = (o,cls,label) => {
+    const dp = dist(o.price);
+    const q = (o.qty!=null && Math.abs(o.qty-qty)>1e-9) ? `·${fmt(o.qty, o.qty%1?2:0)}` : '';
+    return `<span class="ord-pill ${cls}">${label}${q} ${sym}${fmt(o.price,2)}${dp!=null?` <span style="opacity:.65">(${dp>=0?'+':''}${fmt(dp,1)}%)</span>`:''}</span>`;
+  };
+  const tps = pend.filter(o=>o.kind==='tp'), sls = pend.filter(o=>o.kind==='sl');
+  const badges = [...tps.map(o=>pill(o,'ord-tp','TP')), ...sls.map(o=>pill(o,'ord-sl','SL'))].join(' ');
+  // Potential $ from average cost if every TP / SL filled at its own quantity.
+  const reward = tps.reduce((s,o)=>s+(o.price-avg)*(o.qty||qty),0);
+  const risk   = sls.reduce((s,o)=>s+(avg-o.price)*(o.qty||qty),0);
+  const stats = [];
+  if (risk>0.005) stats.push(`R:R ${reward>0?fmt(reward/risk,2):'—'}`);
+  if (reward>0.005) stats.push(`<span class="positive">reward +${sym}${fmt(reward,2)}</span>`);
+  if (risk>0.005) stats.push(`<span class="negative">risk −${sym}${fmt(risk,2)}</span>`);
+  else if (risk<-0.005) stats.push(`<span class="positive">stop locks +${sym}${fmt(-risk,2)}</span>`);  // stop raised above cost
+  const statLine = stats.length ? `<span style="margin-left:4px;color:var(--muted);font-size:11px;">${stats.join('  ·  ')}</span>` : '';
+  return `<tr class="pending-row"><td colspan="7" style="padding:5px 10px 8px 44px;border-top:none;">
+    <span style="font-size:10.5px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin-right:7px;">exit orders</span>${badges}${statLine}</td></tr>`;
 }
 // Individual buy lots + sells + remaining line shown when a stock position is expanded.
 function stockDetailRows(g, sym) {
