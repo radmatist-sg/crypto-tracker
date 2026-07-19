@@ -716,14 +716,14 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     </div>
     <div id="lot-modal-summary" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:18px;font-size:12px;color:var(--muted);line-height:1.9;"></div>
     <div class="form-grid">
-      <div class="form-row"><label>Shares</label><input type="number" id="lot-shares" step="0.0001" placeholder="0"></div>
+      <div class="form-row"><label id="lot-shares-label">Shares</label><input type="number" id="lot-shares" step="0.0001" placeholder="0"></div>
       <div class="form-row"><label>Price per share</label><input type="number" id="lot-price" step="0.01" placeholder="0"></div>
-      <div class="form-row">
+      <div class="form-row" id="lot-ccy-row">
         <label>Currency</label>
         <select id="lot-ccy"><option value="USD">USD</option><option value="SGD">SGD</option></select>
       </div>
       <div class="form-row"><label>Fees</label><input type="number" id="lot-fees" step="0.01" placeholder="0"></div>
-      <div class="form-row" style="grid-column:1 / -1;"><label>Date bought</label><input type="date" id="lot-date"></div>
+      <div class="form-row" style="grid-column:1 / -1;"><label id="lot-date-label">Date bought</label><input type="date" id="lot-date"></div>
     </div>
     <div id="lot-ccy-hint" style="font-size:11px;color:var(--muted);margin:10px 0 0;line-height:1.6;"></div>
     <div style="display:flex;gap:10px;margin-top:20px;">
@@ -3800,23 +3800,32 @@ function prefillSell(tk, ccy, broker) {
 // Currency in particular had no edit path at all: a buy tagged with the wrong currency
 // could only be fixed by deleting the position and retyping it.
 let _editLotId = null;
-function editBuyLot(id) {
+function editBuyLot(id) { editLot(id); }
+function editLot(id) {
   const b = S.stocks.find(x => x.id===id);
-  if (!b) { toast('Purchase not found.'); return; }
+  if (!b) { toast('Entry not found.'); return; }
   _editLotId = id;
+  const isSale = b.kind==='sell', ccy = b.ccy||'USD', sym = ccySym(ccy);
   const px = S.stockPx[b.ticker];
-  document.getElementById('lot-modal-title').textContent = `Edit purchase: ${b.ticker}`;
+  document.getElementById('lot-modal-title').textContent = `${isSale?'Edit sale':'Edit purchase'}: ${b.ticker}`;
   document.getElementById('lot-modal-summary').innerHTML =
-    `<strong>Recorded:</strong> ${fmt(_sn(b.shares), 4)} shares @ ${ccySym(b.ccy||'USD')}${fmt(_sn(b.price),2)} ${b.ccy||'USD'}<br>`
-    + `<strong>Cost:</strong> ${ccySym(b.ccy||'USD')}${fmt(_sn(b.shares)*_sn(b.price)+_sn(b.fees),2)} · ${esc(acctLabel(b.broker))}`;
+    `<strong>Recorded:</strong> ${fmt(_sn(b.shares), 4)} shares @ ${sym}${fmt(_sn(b.price),2)} ${ccy}<br>`
+    + `<strong>${isSale?'Proceeds':'Cost'}:</strong> ${sym}${fmt(_sn(b.shares)*_sn(b.price)+(isSale?-1:1)*_sn(b.fees),2)} · ${esc(acctLabel(b.broker))}`
+    + (isSale && b.basis!=null ? `<br><strong>Cost basis:</strong> ${sym}${fmt(_sn(b.basis),2)} — recalculated if you change the quantity or date` : '');
+  document.getElementById('lot-shares-label').textContent = isSale ? 'Shares sold' : 'Shares';
+  document.getElementById('lot-date-label').textContent   = isSale ? 'Date sold' : 'Date bought';
+  // Currency is a property of the whole position, so it's only editable from a purchase.
+  document.getElementById('lot-ccy-row').style.display = isSale ? 'none' : '';
   document.getElementById('lot-shares').value = _sn(b.shares) || '';
   document.getElementById('lot-price').value  = _sn(b.price) || '';
-  document.getElementById('lot-ccy').value    = b.ccy || 'USD';
+  document.getElementById('lot-ccy').value    = ccy;
   document.getElementById('lot-fees').value   = _sn(b.fees) || '';
   document.getElementById('lot-date').value   = (b.date||'').slice(0,10);
-  document.getElementById('lot-ccy-hint').textContent = px?.ccy
-    ? `Live quotes for ${b.ticker} come back in ${px.ccy}. The currency here is the one you actually paid in — if they differ the price is converted.`
-    : `Refresh prices to confirm which currency ${b.ticker} is quoted in.`;
+  document.getElementById('lot-ccy-hint').textContent = isSale
+    ? `Currency is set on the position — edit a purchase to change it for the whole ${b.ticker} holding.`
+    : (px?.ccy
+      ? `Live quotes for ${b.ticker} come back in ${px.ccy}. The currency here is the one you actually paid in — if they differ the price is converted.`
+      : `Refresh prices to confirm which currency ${b.ticker} is quoted in.`);
   document.getElementById('lot-modal').style.display = 'flex';
 }
 function closeLotModal() { document.getElementById('lot-modal').style.display='none'; _editLotId=null; }
@@ -3826,7 +3835,23 @@ function saveLotEdit() {
   const shares=_sn(document.getElementById('lot-shares').value), price=_sn(document.getElementById('lot-price').value);
   if (!shares || !price) { toast('Enter shares and price.'); return; }
   const date = toISODate(document.getElementById('lot-date').value);
-  if (!date) { toast('Enter the date bought.'); return; }
+  if (!date) { toast('Enter the date.'); return; }
+
+  if (b.kind==='sell') {
+    // Can't sell more than the position ever held.
+    const bought = S.stocks.filter(x => (x.kind==='buy'||!x.kind) && (x.ticker||'')===(b.ticker||'')
+      && x.broker===b.broker && (x.ccy||'USD')===(b.ccy||'USD')).reduce((s,x)=>s+_sn(x.shares),0);
+    const otherSold = S.stocks.filter(x => x.kind==='sell' && x.id!==b.id && (x.ticker||'')===(b.ticker||'')
+      && x.broker===b.broker && (x.ccy||'USD')===(b.ccy||'USD')).reduce((s,x)=>s+_sn(x.shares),0);
+    if (otherSold + shares > bought + 1e-9) { toast(`That's more than the ${fmt(bought,4)} shares ever bought.`); return; }
+    // The frozen basis was fixed against the old quantity and date, so drop it and let
+    // stampSaleBasis replay the position and re-derive it — same rule the crypto side uses.
+    delete b.basis; delete b.avgCostAt;
+    Object.assign(b, { shares, price, fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now() });
+    stampSaleBasis(); persist(); closeLotModal(); renderStocks();
+    toast('Sale updated ✓'); return;
+  }
+
   const oldCcy = b.ccy || 'USD', newCcy = document.getElementById('lot-ccy').value;
   // Positions are keyed broker|ticker|currency, so re-tagging one buy would strand the
   // sells and dividends of that position in the old currency. Currency moves as a whole.
@@ -4086,6 +4111,7 @@ function stockRowHtml(g) {
     // open + realized + dividends, against everything invested — not the open leg alone.
     const t=g.totalPnl, pct=g.totalPnlPct;
     pnlCellH=`<span class="${t>=0?'positive':'negative'}">${t>=0?'+':'-'}${sym}${fmt(Math.abs(t),2)}</span>`
+      + ` <span style="font-size:11px;color:var(--muted);">total</span>`
       + (pct!=null?` <span style="font-size:11px;">(${t>=0?'+':''}${fmt(pct,1)}%)</span>`:'')
       + `<span style="display:block;color:var(--muted);font-size:11px;" title="Total on ${sym}${fmt(g.totalInvested,2)} invested">`
       + `${g.unrealized>=0?'+':'-'}${sym}${fmt(Math.abs(g.unrealized),2)} open · ${g.realized>=0?'+':'-'}${sym}${fmt(Math.abs(g.realized),2)} real`
@@ -4093,7 +4119,10 @@ function stockRowHtml(g) {
       + (g.annual!=null?`<span style="display:block;color:var(--muted);font-size:11px;">${g.annual>=0?'+':''}${fmt(g.annual*100,1)}%/yr</span>`:'');
   } else if (g.unrealized!=null) {
     const pct=g.remainingCost?g.unrealized/g.remainingCost*100:null;
-    pnlCellH=`<span class="${g.unrealized>=0?'positive':'negative'}">${g.unrealized>=0?'+':'-'}${sym}${fmt(Math.abs(g.unrealized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${g.unrealized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}${sub}`;
+    // Same column, three different meanings depending on the row — so each says which it is.
+    pnlCellH=`<span class="${g.unrealized>=0?'positive':'negative'}">${g.unrealized>=0?'+':'-'}${sym}${fmt(Math.abs(g.unrealized),2)}</span>`
+      + ` <span style="font-size:11px;color:var(--muted);">open</span>`
+      + `${pct!=null?` <span style="font-size:11px;">(${g.unrealized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}${sub}`;
   } else pnlCellH=`<span class="neutral">—</span>${sub}`;
   const actions = closed
     ? `<button class="action-btn del" title="Remove" onclick="delStock('${g.broker}','${g.ticker}')">×</button>`
@@ -4190,7 +4219,7 @@ function stockDetailRows(g, sym) {
       <td><span class="sold-badge">SELL</span></td>
       <td style="font-size:12px;">${sym}${fmt(proceeds,2)}</td>
       <td><span class="${rcls}">${rsgn}${sym}${fmt(Math.abs(realized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${realized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}</td>
-      <td></td>
+      <td><div class="trade-actions"><button class="action-btn" title="Correct this sale — shares, price, date" onclick="editLot('${s.id}')">Edit</button></div></td>
     </tr>`);
   }
   if (g.remainingQty>0 && g.sells.length>0) {
