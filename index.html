@@ -708,6 +708,31 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 <div class="toast" id="toast"></div>
 
 <!-- ── SELL MODAL ────────────────────────────────────────── -->
+<div id="lot-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px;width:420px;max-width:94vw;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
+      <h3 style="font-size:15px;font-weight:700;" id="lot-modal-title">Edit purchase</h3>
+      <button onclick="closeLotModal()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;">×</button>
+    </div>
+    <div id="lot-modal-summary" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:18px;font-size:12px;color:var(--muted);line-height:1.9;"></div>
+    <div class="form-grid">
+      <div class="form-row"><label>Shares</label><input type="number" id="lot-shares" step="0.0001" placeholder="0"></div>
+      <div class="form-row"><label>Price per share</label><input type="number" id="lot-price" step="0.01" placeholder="0"></div>
+      <div class="form-row">
+        <label>Currency</label>
+        <select id="lot-ccy"><option value="USD">USD</option><option value="SGD">SGD</option></select>
+      </div>
+      <div class="form-row"><label>Fees</label><input type="number" id="lot-fees" step="0.01" placeholder="0"></div>
+      <div class="form-row" style="grid-column:1 / -1;"><label>Date bought</label><input type="date" id="lot-date"></div>
+    </div>
+    <div id="lot-ccy-hint" style="font-size:11px;color:var(--muted);margin:10px 0 0;line-height:1.6;"></div>
+    <div style="display:flex;gap:10px;margin-top:20px;">
+      <button class="btn btn-secondary" style="flex:1;" onclick="closeLotModal()">Cancel</button>
+      <button class="btn" style="flex:1;" onclick="saveLotEdit()">Save changes</button>
+    </div>
+  </div>
+</div>
+
 <div id="sell-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:200;align-items:center;justify-content:center;">
   <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:28px;width:460px;max-width:94vw;max-height:90vh;overflow-y:auto;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;">
@@ -3721,9 +3746,23 @@ async function fetchFx() {
   return S.fx.SGD;
 }
 function toUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a/(S.fx.SGD||1.35) : a; }
+function fromUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a*(S.fx.SGD||1.35) : a; }
 function toBase(a, ccy) { const u=toUSD(a,ccy); return S.baseCcy==='USD' ? u : u*(S.fx.SGD||1.35); }
+// A quote is worth nothing without knowing what currency it's in. SPY at 743 is $743,
+// not S$743 — applying it to an SGD-tagged position understated that holding by 35%.
+function convCcy(a, from, to) { return (!from || from===to) ? a : fromUSD(toUSD(a, from), to); }
 function setBaseCcy(c) { S.baseCcy = c; persist(); renderStocks(); renderPortfolio(); }
 
+// Finnhub's quote endpoint returns the exchange's own currency (SPY→USD, D05.SI→SGD) and
+// never tells you which one. profile2 does. Cached on the price entry: one call per ticker, ever.
+async function tickerCcy(tk) {
+  const known = S.stockPx[tk]?.ccy; if (known) return known;
+  try {
+    const r = await fetch(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
+    if (r.ok) { const d = await r.json(); if (d?.currency) return String(d.currency).toUpperCase(); }
+  } catch {}
+  return null;                         // unknown → don't guess; leave the price as-is and flag it
+}
 async function refreshStockPrices() {
   if (!S.keys.finnhub) { toast('Add a free Finnhub API key in Settings to fetch stock prices.'); return; }
   const tickers = [...new Set(S.stocks.filter(e=>e.kind==='buy'||e.kind==='sell').map(e=>(e.ticker||'').toUpperCase()))].filter(Boolean);
@@ -3733,17 +3772,20 @@ async function refreshStockPrices() {
   for (const tk of tickers) {
     try {
       const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
-      if (r.ok) { const d = await r.json(); if (d && d.c) S.stockPx[tk] = { price:d.c, ts:Date.now() }; }
+      if (r.ok) { const d = await r.json(); if (d && d.c) S.stockPx[tk] = { price:d.c, ts:Date.now(), ccy: await tickerCcy(tk) }; }
     } catch {}
   }
   persist(); renderStocks(); toast('Stock prices updated ✓');
 }
-function editStockPrice(tk) {
-  const cur = S.stockPx[tk]?.price ?? '';
-  const raw = prompt(`Set current price for ${tk} (per share):`, cur);
+function editStockPrice(tk, ccy) {
+  // Typed prices are quoted in whatever currency the person is looking at, so stamp the
+  // position's currency onto it — an unlabelled price is what caused the 35% understatement.
+  const c = ccy || S.stockPx[tk]?.ccy || 'USD';
+  const cur = S.stockPx[tk]?.ccy ? fmt(convCcy(S.stockPx[tk].price, S.stockPx[tk].ccy, c), 2) : (S.stockPx[tk]?.price ?? '');
+  const raw = prompt(`Set current price for ${tk} (per share, in ${c}):`, cur);
   if (raw===null) return;
   const p = parseFloat(raw); if (isNaN(p)||p<0) { toast('Enter a valid number.'); return; }
-  S.stockPx[tk] = { price:p, ts:Date.now() }; persist(); renderStocks();
+  S.stockPx[tk] = { price:p, ts:Date.now(), ccy:c }; persist(); renderStocks();
 }
 function prefillSell(tk, ccy, broker) {
   switchTab('stocks-add');
@@ -3753,6 +3795,55 @@ function prefillSell(tk, ccy, broker) {
   if (broker) document.getElementById('st-broker').value=broker;
   document.getElementById('st-shares').focus();
   document.getElementById('st-shares').scrollIntoView({behavior:'smooth', block:'center'});
+}
+// ── Correcting a purchase after the fact ──
+// Currency in particular had no edit path at all: a buy tagged with the wrong currency
+// could only be fixed by deleting the position and retyping it.
+let _editLotId = null;
+function editBuyLot(id) {
+  const b = S.stocks.find(x => x.id===id);
+  if (!b) { toast('Purchase not found.'); return; }
+  _editLotId = id;
+  const px = S.stockPx[b.ticker];
+  document.getElementById('lot-modal-title').textContent = `Edit purchase: ${b.ticker}`;
+  document.getElementById('lot-modal-summary').innerHTML =
+    `<strong>Recorded:</strong> ${fmt(_sn(b.shares), 4)} shares @ ${ccySym(b.ccy||'USD')}${fmt(_sn(b.price),2)} ${b.ccy||'USD'}<br>`
+    + `<strong>Cost:</strong> ${ccySym(b.ccy||'USD')}${fmt(_sn(b.shares)*_sn(b.price)+_sn(b.fees),2)} · ${esc(acctLabel(b.broker))}`;
+  document.getElementById('lot-shares').value = _sn(b.shares) || '';
+  document.getElementById('lot-price').value  = _sn(b.price) || '';
+  document.getElementById('lot-ccy').value    = b.ccy || 'USD';
+  document.getElementById('lot-fees').value   = _sn(b.fees) || '';
+  document.getElementById('lot-date').value   = (b.date||'').slice(0,10);
+  document.getElementById('lot-ccy-hint').textContent = px?.ccy
+    ? `Live quotes for ${b.ticker} come back in ${px.ccy}. The currency here is the one you actually paid in — if they differ the price is converted.`
+    : `Refresh prices to confirm which currency ${b.ticker} is quoted in.`;
+  document.getElementById('lot-modal').style.display = 'flex';
+}
+function closeLotModal() { document.getElementById('lot-modal').style.display='none'; _editLotId=null; }
+function saveLotEdit() {
+  const b = S.stocks.find(x => x.id===_editLotId);
+  if (!b) { closeLotModal(); return; }
+  const shares=_sn(document.getElementById('lot-shares').value), price=_sn(document.getElementById('lot-price').value);
+  if (!shares || !price) { toast('Enter shares and price.'); return; }
+  const date = toISODate(document.getElementById('lot-date').value);
+  if (!date) { toast('Enter the date bought.'); return; }
+  const oldCcy = b.ccy || 'USD', newCcy = document.getElementById('lot-ccy').value;
+  // Positions are keyed broker|ticker|currency, so re-tagging one buy would strand the
+  // sells and dividends of that position in the old currency. Currency moves as a whole.
+  const sibling = x => (x.ticker||'')===(b.ticker||'') && x.broker===b.broker && (x.ccy||'USD')===oldCcy;
+  const group = S.stocks.filter(sibling);
+  if (newCcy !== oldCcy && group.length > 1
+      && !confirm(`Change the currency of the whole ${b.ticker} position at ${acctLabel(b.broker)} from ${oldCcy} to ${newCcy}?\n\n`
+        + `${group.length} entries (buys, sells and dividends) move together — a position can't be split across two currencies.`)) return;
+  // Selling more than you hold would leave the position quantity negative.
+  const sold = group.filter(x => x.kind==='sell').reduce((s,x)=>s+_sn(x.shares),0);
+  const otherBuys = group.filter(x => (x.kind==='buy'||!x.kind) && x.id!==b.id).reduce((s,x)=>s+_sn(x.shares),0);
+  if (sold > otherBuys + shares + 1e-9) { toast(`That leaves fewer shares than the ${fmt(sold,4)} already sold.`); return; }
+  if (newCcy !== oldCcy) for (const x of group) { x.ccy = newCcy; x._m = Date.now(); }
+  Object.assign(b, { shares, price, ccy:newCcy,
+    fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now() });
+  stampSaleBasis(); persist(); closeLotModal(); renderStocks();
+  toast('Purchase updated ✓');
 }
 function delStock(broker, tk) {
   if (!confirm(`Remove ALL ${tk} entries in ${acctLabel(broker)} (buys, sells, dividends)?`)) return;
@@ -3828,7 +3919,15 @@ function stockMetrics(g) {
   const realized=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)-basisOf(x)),0);
   const dividends=g.divs.reduce((s,d)=>s+_sn(d.amount),0);
   const proceeds=g.sells.reduce((s,x)=>s+(_sn(x.shares)*_sn(x.price)-_sn(x.fees)),0);
-  const px=S.stockPx[g.ticker]?.price ?? null;
+  // One price entry serves every holding of this ticker, but those holdings can be booked in
+  // different currencies (SPY at IG in SGD, SPY at Moomoo in USD). Convert into this group's.
+  const pxRaw=S.stockPx[g.ticker]?.price ?? null, pxCcy=S.stockPx[g.ticker]?.ccy || null;
+  const px=pxRaw!=null?convCcy(pxRaw, pxCcy, g.ccy):null;
+  const pxUnsure = pxRaw!=null && !pxCcy && g.ccy!=='USD';   // can't confirm the quote's currency
+  // The quote's currency is known and it isn't the one this position is booked in. Genuine for
+  // a cross-listing, but far more often a mistyped currency — which silently mis-scales the
+  // whole holding, so say so on the row rather than just converting and moving on.
+  const pxMismatch = pxRaw!=null && !!pxCcy && pxCcy!==g.ccy;
   const marketValue=px!=null?px*remainingQty:null;
   const unrealized=marketValue!=null?marketValue-remainingCost:null;
   const openVal = marketValue!=null ? marketValue : (remainingQty>0?remainingCost:0);
@@ -3843,7 +3942,7 @@ function stockMetrics(g) {
   const stillOut = Math.max(0, totalCost - cashBack);
   const breakEven = remainingQty ? stillOut/remainingQty : null;
   const m = { ...g, totalBought, avgCost, soldQty, remainingQty, remainingCost, realized, dividends,
-    proceeds, totalInvested:totalCost, px, marketValue, unrealized, absReturn, returnPct,
+    proceeds, totalInvested:totalCost, px, pxRaw, pxCcy, pxUnsure, pxMismatch, marketValue, unrealized, absReturn, returnPct,
     totalPnl, totalPnlPct, cashBack, recoveredPct, stillOut, breakEven, soldBasis };
   m.annual = xirr(stockFlows(g, m));
   return m;
@@ -3876,9 +3975,20 @@ function renderStocks() {
 }
 function renderStockStats(ms) {
   let invested=0, value=0, realizedIncome=0, absSum=0, investedSum=0;
+  // A position with no price used to have its cost counted as its value, so it contributed
+  // exactly zero P&L and looked settled. Unrealized is now measured over priced holdings only,
+  // and anything unpriced is reported rather than blended away.
+  let pricedCost=0, pricedValue=0, unpriced=0, unsure=0, mismatched=0;
   const pflows=[];
   for (const g of ms) {
-    if (g.remainingQty>0) { invested+=toBase(g.remainingCost,g.ccy); value+=toBase(g.marketValue!=null?g.marketValue:g.remainingCost,g.ccy); }
+    if (g.remainingQty>0) {
+      invested+=toBase(g.remainingCost,g.ccy);
+      value+=toBase(g.marketValue!=null?g.marketValue:g.remainingCost,g.ccy);
+      if (g.marketValue!=null) { pricedCost+=toBase(g.remainingCost,g.ccy); pricedValue+=toBase(g.marketValue,g.ccy); }
+      else unpriced++;
+      if (g.pxUnsure) unsure++;
+      if (g.pxMismatch) mismatched++;
+    }
     realizedIncome += toBase(g.realized+g.dividends, g.ccy);
     absSum += toBase(g.absReturn, g.ccy); investedSum += toBase(g.totalInvested, g.ccy);
     for (const f of stockFlows(g, g)) pflows.push({ amount: toBase(f.amount, g.ccy), date: f.date });
@@ -3900,7 +4010,9 @@ function renderStockStats(ms) {
       fundFlows.push({ amount:-signed, date:new Date(e.date) });   // deposit = cash out of your pocket
     }
   }
-  const unreal=value-invested, sym=ccySym(S.baseCcy);
+  const unreal=pricedValue-pricedCost, sym=ccySym(S.baseCcy);
+  const priceWarn = [unpriced?`${unpriced} unpriced`:'', mismatched?`⚠ ${mismatched} currency mismatch`:'',
+    unsure?`${unsure} currency unconfirmed`:''].filter(Boolean).join(' · ');
   const totalProfit = absSum;                                   // investment P&L + income (incl. closed)
   const overallPct = investedSum ? totalProfit/investedSum*100 : null;
   const annual = xirr(pflows);
@@ -3920,13 +4032,13 @@ function renderStockStats(ms) {
     ? fundedCard
       + statCard('Invested', sym+fmt(invested,2), 'cost basis, open')
       + statCard('Market Value', sym+fmt(value,2), pctyr(overallPct, annual, 'total') || 'at live prices')
-      + statCard('Unrealized P&L', money(unreal), invested?`${unreal>=0?'+':''}${fmt(unreal/invested*100,1)}% unrealised`:'open positions', cls(unreal))
+      + statCard('Unrealized P&L', money(unreal), priceWarn || (pricedCost?`${unreal>=0?'+':''}${fmt(unreal/pricedCost*100,1)}% unrealised`:'open positions'), cls(unreal))
       + statCard('Realized + Income', money(realizedIncome), 'incl. dividends', cls(realizedIncome))
     : fundedCard
       + statCard('Market Value', sym+fmt(value,2), 'open holdings now')
       + statCard('Total P&L', money(totalProfit), pctyr(fundedPct, fundedAnnual, 'on funded') || 'all-time', cls(totalProfit))
       + statCard('Realized + Income', money(realizedIncome), 'closed + dividends', cls(realizedIncome))
-      + statCard('Unrealized P&L', money(unreal), `${ms.filter(g=>g.remainingQty>0).length} open`, cls(unreal));
+      + statCard('Unrealized P&L', money(unreal), priceWarn || `${ms.filter(g=>g.remainingQty>0).length} open`, cls(unreal));
 }
 function stockRowHtml(g) {
   const sym=ccySym(g.ccy);
@@ -3943,8 +4055,15 @@ function stockRowHtml(g) {
     const exitPer = g.soldQty ? g.proceeds/g.soldQty : 0;
     priceCell = `<span style="color:var(--muted);font-size:12px;" title="Average price this position sold at">sold ${sym}${fmt(exitPer,2)}</span>`;
   }
-  else if (g.px!=null) priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')">${sym}${fmt(g.px,2)}</span>`;
-  else priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}')" style="color:var(--muted);font-size:11px;">click / refresh</span>`;
+  else if (g.px!=null) {
+    // Show the working when a quote had to be converted, so a wrong currency tag is visible
+    // on the row instead of quietly scaling the whole position.
+    const conv = g.pxMismatch
+      ? `<span style="display:block;color:var(--amber,#d9a441);font-size:11px;" title="${g.ticker} is quoted in ${g.pxCcy} but this position is booked in ${g.ccy}. If that's wrong, expand the row and edit the purchase.">⚠ quoted ${ccySym(g.pxCcy)}${fmt(g.pxRaw,2)} ${g.pxCcy}</span>` : '';
+    const warn = g.pxUnsure ? ` <span style="color:var(--muted);font-size:11px;" title="Currency of this quote isn't confirmed — refresh prices to check it, or set it manually">⚠</span>` : '';
+    priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}','${g.ccy}')">${sym}${fmt(g.px,2)}</span>${conv}${warn}`;
+  }
+  else priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}','${g.ccy}')" style="color:var(--muted);font-size:11px;">click / refresh</span>`;
   const cashedOut = partSold && g.cashBack>0.005
     ? `<span style="display:block;color:var(--muted);font-size:11px;" title="Sale proceeds${g.dividends>0.005?' + dividends':''} already in hand">+${sym}${fmt(g.cashBack,2)} cashed out</span>` : '';
   const valCell = closed ? '<span class="neutral">—</span>'
@@ -3981,8 +4100,9 @@ function stockRowHtml(g) {
     : `<button class="action-btn" title="Sell" onclick="prefillSell('${g.ticker}','${g.ccy}','${g.broker}')">Sell</button>
        <button class="action-btn" title="Refresh price" onclick="refreshStockPrices()">↻</button>
        <button class="action-btn del" title="Remove" onclick="delStock('${g.broker}','${g.ticker}')">×</button>`;
-  // Expandable when there's a breakdown worth seeing: any sells, or more than one buy lot.
-  const expandable = (g.sells.length>0) || (g.buys.length>1);
+  // Any position with a purchase behind it can expand. It used to take a sell or a second
+  // buy lot, which meant a single-lot holding had no way to show — or correct — its buy date.
+  const expandable = g.buys.length>0 || g.sells.length>0;
   const expanded = expandable && stockExpanded.has(g.key);
   const caret = !expandable ? '' : `<span class="pos-caret">${expanded?'▾':'▸'}</span>`;
   const assetInner = `${caret}
@@ -4049,7 +4169,7 @@ function stockDetailRows(g, sym) {
       <td><span class="neutral">—</span></td>
       <td style="font-size:12px;color:var(--muted);">${sym}${fmt(cost,2)}</td>
       <td><span class="neutral">—</span></td>
-      <td></td>
+      <td><div class="trade-actions"><button class="action-btn" title="Correct this purchase — shares, price, currency, date" onclick="editBuyLot('${b.id}')">Edit</button></div></td>
     </tr>`);
   }
   const sells = g.sells.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
