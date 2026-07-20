@@ -940,6 +940,18 @@ function groupByKey(key) {
   return g;
 }
 
+// Subtracting float quantities almost never lands on exactly zero: selling 0.1 then 0.2
+// of a 0.3 holding leaves 3e-17, not 0. Every "is this closed?" test is remainingQty<=0,
+// so that speck kept fully-exited positions open — showing a live price, a residual basis
+// and an unrealized P&L on a position that is actually flat. Snapped to 0 here, at the one
+// place remaining quantity is derived, so every downstream check reads it correctly.
+// Relative to the position's own size, so it holds for 0.0004 BTC and 40bn memecoins alike.
+// Deliberately tight: genuine leftover dust is a real holding and must still show as one.
+function snapRemaining(remaining, totalBought) {
+  if (remaining <= 0) return 0;
+  return remaining <= Math.abs(totalBought) * 1e-12 ? 0 : remaining;
+}
+
 // Average-cost metrics for a position (buys + partial sells).
 function positionMetrics(g) {
   const buys = g.buys, sells = g.sells, t0 = buys[0];
@@ -948,7 +960,7 @@ function positionMetrics(g) {
   const totalInvUsd = buys.reduce((s,b)=>s+(entryUsd(b)||0),0);
   const avgCostUsd  = totalBought ? totalInvUsd/totalBought : 0;     // per coin / per NFT
   const soldQty     = sells.reduce((s,x)=>s+(x.sell.qty||0),0);
-  const remainingQty = Math.max(0, totalBought - soldQty);
+  const remainingQty = snapRemaining(totalBought - soldQty, totalBought);
 
   // Each sale carries the cost basis frozen at the moment it happened (sell.basisUsd).
   // Sales recorded before that was stored fall back to today's average — the old
@@ -3373,15 +3385,17 @@ async function submitSell() {
   const date   = dateVal ? new Date(dateVal).toISOString() : new Date().toISOString();
 
   if (editing) {
-    // A correction, not a new event. The old basis was frozen against the old quantity
-    // and date, so it is dropped and re-derived by replaying the position's history —
-    // giving the average as it stood at the (possibly corrected) moment of the sale.
+    // A correction, not a new event. The old basis was frozen against the old quantity,
+    // so it is re-derived — but by the SAME rule a new sale uses (the position's average
+    // across every buy), never by replaying history. A replay averages only the buys made
+    // before this sale, so correcting a typo on a sale you later bought back into would
+    // hand it a different cost basis and silently move its profit.
     editing.date = date;
     editing.txHash = txHash;
     editing.notes = notes;
-    editing.sell = { qty, proceeds, ccy, rate: rate || null, proceedsUsd };
+    editing.sell = { qty, proceeds, ccy, rate: rate || null, proceedsUsd,
+                     basisUsd: m.avgCostUsd * qty, avgCostUsd: m.avgCostUsd };
     touch(editing);
-    stampSaleBasis();
   } else {
     // Freeze the cost basis into the sale. A sale is a finished event: what these coins
     // cost is known now and must never move again. If it were re-derived later from the
@@ -3935,7 +3949,7 @@ function stockMetrics(g) {
   const totalCost=g.buys.reduce((s,b)=>s+(_sn(b.shares)*_sn(b.price)+_sn(b.fees)),0);
   const avgCost=totalBought?totalCost/totalBought:0;
   const soldQty=g.sells.reduce((s,x)=>s+_sn(x.shares),0);
-  const remainingQty=Math.max(0,totalBought-soldQty);
+  const remainingQty=snapRemaining(totalBought-soldQty, totalBought);
   // Basis frozen onto each sale when it happened (see stampSaleBasis). Sales from
   // before that existed fall back to today's average — the old behaviour.
   const basisOf=x=>(x.basis!=null)?_sn(x.basis):avgCost*_sn(x.shares);
