@@ -3287,9 +3287,14 @@ async function fetchSellTx() {
       }
     }
 
-    // Calculate P&L against the average cost of the quantity being sold
+    // Calculate P&L against the MOVING average cost of the units still held (pool cost ÷
+    // pool qty) — matches what submitSell freezes, so the preview equals the saved result.
     const qtyForCalc = detectedQty > 0 ? detectedQty : m.remainingQty;
-    const invested = m.avgCostUsd * qtyForCalc;
+    const _editP  = _editSellId ? S.trades.find(x => x.id===_editSellId && isSell(x)) : null;
+    const _poolQ  = m.remainingQty + (_editP ? (_editP.sell.qty || 0) : 0);
+    const _poolC  = Math.max(0, m.totalInvUsd - m.soldBasisUsd) + (_editP ? (_editP.sell.basisUsd || 0) : 0);
+    const _unitB  = _poolQ > 0 ? _poolC / _poolQ : m.avgCostUsd;
+    const invested = _unitB * qtyForCalc;
     const stableProceeds = isStable(ccy);
     const feeUsd  = feeCost * (nativeUsd || 0);
     const proceedsUsdNoFee  = stableProceeds ? proceedsNoFee  : proceedsNoFee  * (nativeUsd || 0);
@@ -3384,6 +3389,17 @@ async function submitSell() {
   const notes  = document.getElementById('sell-notes').value.trim();
   const date   = dateVal ? new Date(dateVal).toISOString() : new Date().toISOString();
 
+  // Cost basis of the units this sale actually draws from — the MOVING average of what
+  // is still held right now (pool cost ÷ pool qty), not the average across every buy ever
+  // made. Units already sold have left the pool, so a buy made AFTER an earlier sale must
+  // not dilute its cheaper cost onto this one. When correcting a sale, its own shares go
+  // back into the pool first (both cost and qty) so the average is measured against them.
+  const editBasis = editing ? (editing.sell.basisUsd || 0) : 0;
+  const editQty   = editing ? (editing.sell.qty || 0) : 0;
+  const poolQty   = m.remainingQty + editQty;
+  const poolCost  = Math.max(0, m.totalInvUsd - m.soldBasisUsd) + editBasis;
+  const unitBasis = poolQty > 0 ? poolCost / poolQty : m.avgCostUsd;
+
   if (editing) {
     // A correction, not a new event. The old basis was frozen against the old quantity,
     // so it is re-derived — but by the SAME rule a new sale uses (the position's average
@@ -3394,7 +3410,7 @@ async function submitSell() {
     editing.txHash = txHash;
     editing.notes = notes;
     editing.sell = { qty, proceeds, ccy, rate: rate || null, proceedsUsd,
-                     basisUsd: m.avgCostUsd * qty, avgCostUsd: m.avgCostUsd };
+                     basisUsd: unitBasis * qty, avgCostUsd: unitBasis };
     touch(editing);
   } else {
     // Freeze the cost basis into the sale. A sale is a finished event: what these coins
@@ -3406,7 +3422,7 @@ async function submitSell() {
       chain: t0.chain, type: t0.type, date, txHash, notes,
       asset: { name:t0.asset.name, symbol:t0.asset.symbol, contract:t0.asset.contract, tokenId:t0.asset.tokenId||null },
       sell: { qty, proceeds, ccy, rate: rate || null, proceedsUsd,
-              basisUsd: m.avgCostUsd * qty, avgCostUsd: m.avgCostUsd }
+              basisUsd: unitBasis * qty, avgCostUsd: unitBasis }
     });
   }
 
@@ -3415,8 +3431,8 @@ async function submitSell() {
   closeSellModal();
   renderPortfolio();
 
-  // Read the basis back off the record — on an edit it was just re-derived by replay.
-  const basisUsd = editing ? (editing.sell.basisUsd || 0) : (m.avgCostUsd * qty);
+  // Same moving-average basis that was just frozen into the record, for the toast.
+  const basisUsd = unitBasis * qty;
   const realized = proceedsUsd - basisUsd;
   const verb = editing ? 'Sale updated —' : `Sold ${fmtAmt(qty, isNft?'nft':'coin')} ${t0.asset.name} —`;
   _editSellId = null;
