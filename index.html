@@ -920,7 +920,20 @@ function syncGroupPrice(t) {
 function isBuy(t)  { return t.kind !== 'sell' && t.status !== 'closed'; }
 function isSell(t) { return t.kind === 'sell'; }
 
-// Group open buys + their sell records by asset. Only groups with ≥1 buy returned.
+// Group open buys + their sell records by asset, then cut each asset's history into separate
+// TRADES the same way the stocks side does (see splitStockEpisodes): a run from the first buy
+// until the quantity returns to zero. Buying back into a coin you already round-tripped is a
+// new trade, not a continuation — pooling them would let the finished one's proceeds count as
+// capital recovered on the new entry and add its profit to the new trade's P&L.
+// Only trades with ≥1 buy are returned, as before.
+function splitCryptoEpisodes(g) {
+  const eps = _splitEpisodes(g.buys, g.sells, isSell, x => (x.asset?.amount) || 0, x => (x.sell?.qty) || 0)
+    .filter(ep => ep.buys.length);
+  eps.forEach((ep,i) => {
+    ep.baseKey = g.key; ep.key = g.key+'#ep'+i; ep.epIndex = i+1; ep.epCount = eps.length;
+  });
+  return eps;
+}
 function groupOpenAndSells(trades) {
   const map = new Map();
   for (const t of trades) {
@@ -929,16 +942,26 @@ function groupOpenAndSells(trades) {
     if (!map.has(k)) map.set(k, { key:k, buys:[], sells:[] });
     (isSell(t) ? map.get(k).sells : map.get(k).buys).push(t);
   }
-  return [...map.values()].filter(g => g.buys.length);
+  const out = [];
+  for (const g of map.values()) out.push(...splitCryptoEpisodes(g));
+  return out;
 }
-function groupByKey(key) {
-  const g = { key, buys:[], sells:[] };
+// Every trade of one asset, newest last. Rebuilt on demand so it reflects edits immediately.
+function cryptoEpisodes(baseKey) {
+  const g = { key:baseKey, buys:[], sells:[] };
   for (const t of S.trades) {
-    if (groupKey(t) !== key) continue;
+    if (groupKey(t) !== baseKey) continue;
     if (t.status === 'closed' && t.kind !== 'sell') continue;
     (isSell(t) ? g.sells : g.buys).push(t);
   }
-  return g;
+  return splitCryptoEpisodes(g);
+}
+// Which trade of its asset a given buy or sell belongs to. Returned as an index rather than
+// parsed back out of a display key — an NFT's own name can contain a '#'.
+function episodeIndexOf(t) {
+  const eps = cryptoEpisodes(groupKey(t));
+  const i = eps.findIndex(ep => ep.buys.some(x=>x.id===t.id) || ep.sells.some(x=>x.id===t.id));
+  return i >= 0 ? i : Math.max(0, eps.length-1);
 }
 
 // Subtracting float quantities almost never lands on exactly zero: selling 0.1 then 0.2
@@ -975,7 +998,15 @@ function positionMetrics(g) {
   const totNoFee = buys.reduce((s,b)=>s+(b.entry.noFee||0),0);
   const totWith  = buys.reduce((s,b)=>s+(b.entry.withFee||0),0);
   const priceLot = buys.find(b=>b.priceLive!==null);
-  const livePrice = priceLot ? priceLot.priceLive : null;
+  let livePrice = priceLot ? priceLot.priceLive : null;
+  // The live price belongs to the ASSET, not to one trade of it. Now that a re-entered coin
+  // is its own trade, a new buy that has not been priced yet would otherwise show no price
+  // at all — even though the asset's price is sitting on the earlier trade's lots.
+  if (livePrice == null && buys.length) {
+    const k = groupKey(buys[0]);
+    const other = S.trades.find(t => !isSell(t) && t.priceLive != null && groupKey(t) === k);
+    if (other) livePrice = other.priceLive;
+  }
   let openValueUsd = null, openValueEth = null;
   if (livePrice !== null) {
     if (isNft) { openValueEth = livePrice*remainingQty; openValueUsd = openValueEth*ccyUsd(buys[0] && CHAINS[buys[0].chain] ? CHAINS[buys[0].chain].ccy : 'ETH'); }
@@ -2016,7 +2047,9 @@ function renderPortfolio() {
   let html = '';
   for (const i of openIdx) {
     const g = _groups[i];
-    const plain = g.buys.length === 1 && g.sells.length === 0;
+    // A lone untouched buy still renders as a simple row — but not when the asset has been
+    // traded before, or the row would drop the badge saying which trade it is.
+    const plain = g.buys.length === 1 && g.sells.length === 0 && g.epCount === 1;
     html += plain ? rowHtml(g.buys[0]) : positionHtml(i, metrics[i]);
   }
 
@@ -2279,6 +2312,10 @@ function positionHtml(i, m) {
     pnlHtml = `<span class="${cls}">${sign}$${fmt(Math.abs(pnl),2)}</span>${pctStr}`;
   }
 
+  // When an asset has been round-tripped and re-entered, say which trade this row is —
+  // otherwise two rows for the same coin are indistinguishable at a glance.
+  const epBadge = g.epCount>1
+    ? `<span class="closed-badge" title="Trade ${g.epIndex} of ${g.epCount} in ${esc(t0.asset.name)}">TRADE ${g.epIndex}/${g.epCount}</span>` : '';
   const subText = partial
     ? `${count} buys · ${fullySold?'fully sold':'partially sold'} · ${expanded?'hide':'show'} buys & sells`
     : `blended average · ${expanded?'hide':'show'} the ${count} individual buys`;
@@ -2289,7 +2326,7 @@ function positionHtml(i, m) {
         <span class="pos-caret">${caret}</span>
         ${iconHtml(imgFor((t0.asset.contract||'').toLowerCase()), t0.asset.symbol, ch.color)}
         <div>
-          <div class="asset-name">${esc(t0.asset.name)}${t0.airdrop?'<span class="pos-badge" title="Airdrop / reward">🎁 AIRDROP</span>':''}<span class="pos-badge">${count} BUY${count>1?'S':''}</span>${fullySold?'<span class="sold-badge">SOLD</span>':partial?'<span class="sold-badge">PART. SOLD</span>':''}</div>
+          <div class="asset-name">${esc(t0.asset.name)}${t0.airdrop?'<span class="pos-badge" title="Airdrop / reward">🎁 AIRDROP</span>':''}${epBadge}<span class="pos-badge">${count} BUY${count>1?'S':''}</span>${fullySold?'<span class="sold-badge">SOLD</span>':partial?'<span class="sold-badge">PART. SOLD</span>':''}</div>
           <div class="asset-sub">${subText}</div>
         </div>
       </div>
@@ -2993,15 +3030,22 @@ function clearPrice(id) {
 }
 
 // ─── SELL MODAL ────────────────────────────────────────────
-let _sellKey = null;
+// The modal sells out of ONE trade of an asset, not the asset's whole history — held as the
+// asset's group key plus which trade, so it survives the list being rebuilt after a save.
+let _sellKey = null;         // { base, idx }
 let _editSellId = null;      // set when the modal is correcting an existing sale
+function sellGroup() {
+  if (!_sellKey) return { key:'', buys:[], sells:[] };
+  const eps = cryptoEpisodes(_sellKey.base);
+  return eps[_sellKey.idx] || eps.find(e=>e.open) || eps[eps.length-1] || { key:'', buys:[], sells:[] };
+}
 
 function openSellModal(buyId) {
   _editSellId = null;
   const buy = S.trades.find(x => x.id===buyId);
   if (!buy) return;
-  _sellKey = groupKey(buy);
-  const g = groupByKey(_sellKey);
+  _sellKey = { base: groupKey(buy), idx: episodeIndexOf(buy) };
+  const g = sellGroup();
   if (!g.buys.length) return;
   const m = positionMetrics(g);
   const t0 = m.t0, isNft = m.isNft;
@@ -3046,8 +3090,10 @@ function openSellModal(buyId) {
 function editSale(sellId) {
   const s = S.trades.find(x => x.id===sellId && isSell(x));
   if (!s) return;
-  _sellKey = groupKey(s);
-  const g = groupByKey(_sellKey);
+  // The sale being corrected may belong to a trade that has since closed — edit it there,
+  // not on whichever trade of this asset happens to be open now.
+  _sellKey = { base: groupKey(s), idx: episodeIndexOf(s) };
+  const g = sellGroup();
   if (!g.buys.length) return;
   const m = positionMetrics(g);
   const t0 = m.t0, isNft = m.isNft;
@@ -3108,7 +3154,7 @@ function closeSellModal() {
 
 // ─── FETCH SELL TX ─────────────────────────────────────────
 async function fetchSellTx() {
-  const g = groupByKey(_sellKey);
+  const g = sellGroup();
   if (!g.buys.length) return;
   const m = positionMetrics(g);
   const t = m.t0;
@@ -3354,7 +3400,7 @@ async function fetchSellTx() {
 }
 
 async function submitSell() {
-  const g = groupByKey(_sellKey);
+  const g = sellGroup();
   if (!g.buys.length) return;
   const m = positionMetrics(g);
   const t0 = m.t0, isNft = m.isNft;
@@ -3981,27 +4027,35 @@ function _replayOrder(evts, isSellFn) {
 // followed by a same-day re-entry merges into one trade instead of two — it pools, which is
 // the old behaviour, rather than mis-stamping a basis. Only reachable by day-trading one
 // ticker in and out and back in within a single session.
-function splitStockEpisodes(g) {
-  const mk = () => ({ key:'', ticker:g.ticker, broker:g.broker, ccy:g.ccy, name:g.name,
-                      buys:[], sells:[], divs:[] });
+// The split itself, shared by stocks and crypto so the two can never drift apart. Given a
+// position's buys and sells it returns [{buys, sells, open}] — one entry per trade.
+// buyQty/sellQty are separate: a buy and a sale record their quantity in different places
+// (shares vs shares for stocks, asset.amount vs sell.qty for crypto).
+function _splitEpisodes(buys, sells, isSellFn, buyQty, sellQty) {
   const eps = [];
   let cur = null, qty = 0, bought = 0;
-  for (const e of _replayOrder([...g.buys, ...g.sells], x => x.kind === 'sell')) {
-    if (e.kind === 'sell') {
+  for (const e of _replayOrder([...buys, ...sells], isSellFn)) {
+    if (isSellFn(e)) {
       // A sale with nothing open — a buy missing from the history, or an oversell. It belongs
       // to the trade before it, never to a new one, and must never be silently dropped.
-      if (!cur) { if (eps.length) cur = eps[eps.length-1]; else { cur = mk(); eps.push(cur); } }
+      if (!cur) { if (eps.length) cur = eps[eps.length-1]; else { cur = {buys:[],sells:[],open:true}; eps.push(cur); } }
       cur.sells.push(e);
-      qty -= _sn(e.shares);
+      qty -= sellQty(e);
     } else {
-      if (!cur) { cur = mk(); eps.push(cur); qty = 0; bought = 0; }
+      if (!cur) { cur = {buys:[],sells:[],open:true}; eps.push(cur); qty = 0; bought = 0; }
       cur.buys.push(e);
-      qty += _sn(e.shares); bought += _sn(e.shares);
+      qty += buyQty(e); bought += buyQty(e);
     }
     // Flat → this trade is finished and sealed. The next buy opens a fresh one.
-    if (snapRemaining(qty, bought) <= 0) { cur = null; qty = 0; bought = 0; }
+    if (snapRemaining(qty, bought) <= 0) { cur.open = false; cur = null; qty = 0; bought = 0; }
   }
-  if (!eps.length) eps.push(mk());          // dividends but no trades — still worth a row
+  return eps;
+}
+function splitStockEpisodes(g) {
+  const base = { ticker:g.ticker, broker:g.broker, ccy:g.ccy, name:g.name };
+  const eps = _splitEpisodes(g.buys, g.sells, x => x.kind === 'sell', x => _sn(x.shares), x => _sn(x.shares))
+    .map(ep => ({ ...base, ...ep, divs:[] }));
+  if (!eps.length) eps.push({ ...base, buys:[], sells:[], divs:[], open:true });  // dividends but no trades
   // A dividend belongs to whichever trade was running when it was paid. One that arrives
   // after an exit (record date inside the trade, payment after) falls to the latest trade
   // that had already started by then, which is the one that earned it.
