@@ -893,7 +893,8 @@ function haveWallets() { return myWalletAddrs().length > 0; }
 
 // Grouping: multiple buys of the same asset are merged into one position row.
 let expandedGroups = new Set();   // which group keys are expanded to show individual buys
-let stockExpanded = new Set();    // which stock group keys are expanded to show buys & sells
+let stockExpanded = new Set();    // which stock episode keys are expanded to show buys & sells
+let _stockEps = new Map();        // episode key → metrics, for the current render's row handlers
 let _groups = [];                 // current render's [{key, lots}] — indexed by row handlers
 function groupKey(t) {
   const id = (t.asset.contract || t.asset.name || '').toLowerCase();
@@ -3900,11 +3901,16 @@ function saveLotEdit() {
   stampSaleBasis(); persist(); closeLotModal(); renderStocks();
   toast('Purchase updated ✓');
 }
-function delStock(broker, tk) {
-  if (!confirm(`Remove ALL ${tk} entries in ${acctLabel(broker)} (buys, sells, dividends)?`)) return;
-  const match = e => (e.ticker||'').toUpperCase()===tk && (e.broker||'other')===broker;
-  S.stocks.filter(match).forEach(e => tombstone(e.id));
-  S.stocks = S.stocks.filter(e => !match(e));
+// Remove one trade — its own buys, sells and dividends — and nothing else. A ticker you
+// have traded twice has two independent rows; deleting one must leave the other intact.
+function delStockEpisode(key) {
+  const g = _stockEps.get(key); if (!g) return;
+  const ids = new Set([...g.buys, ...g.sells, ...g.divs].map(e=>e.id));
+  if (!ids.size) return;
+  const scope = g.epCount>1 ? `trade ${g.epIndex} of ${g.epCount}` : `all ${g.ticker} entries`;
+  if (!confirm(`Remove ${scope} in ${g.ticker} (${acctLabel(g.broker)}) — ${ids.size} entr${ids.size===1?'y':'ies'}: buys, sells and dividends?`)) return;
+  S.stocks.filter(e => ids.has(e.id)).forEach(e => tombstone(e.id));
+  S.stocks = S.stocks.filter(e => !ids.has(e.id));
   persist(); renderStocks();
 }
 
@@ -3947,6 +3953,73 @@ function stockFlows(g, m) {
 }
 
 // ── Grouping + average-cost metrics (per ticker PER BROKER, in native currency) ──
+//
+// A ticker traded more than once is NOT one position — it is a sequence of separate trades.
+// Pooling a whole lifetime into one bucket lets a finished round-trip contaminate the next
+// entry: its proceeds count as "cost recovered" against fresh capital, its shares drag the
+// average cost away from what you actually paid, and its profit is added to the new trade's
+// P&L. Buy 8 ORCL at $181.80 and sell at $195, then buy 8 more at $120.47, and the new
+// position reports avg cost $151.20, "64% of cost recovered", B/E $107.55 and +$104.88 —
+// when the truth is $120.47, 0% recovered, B/E $120.47 and +$1.52.
+//
+// So each broker|ticker|ccy history is replayed in date order and cut into EPISODES: a run
+// from the first buy until the quantity returns to zero. Each episode is its own row with
+// its own average cost, break-even and P&L, and the next buy starts a clean one.
+const _dayOf = x => (x.date || '').slice(0,10);
+// Same replay order as stampSaleBasis — by day, buys ahead of sells within a day (you cannot
+// sell what you have not bought), then by timestamp. Sharing the order matters: it is what
+// makes each episode's boundaries agree with the cost basis already stamped onto its sales.
+function _replayOrder(evts, isSellFn) {
+  return evts.slice().sort((a,b) =>
+    _dayOf(a).localeCompare(_dayOf(b))
+    || (isSellFn(a)?1:0) - (isSellFn(b)?1:0)
+    || new Date(a.date) - new Date(b.date));
+}
+// Known limit: stock dates are stored day-only (toISODate drops the time the broker CSV
+// carried), so events on the SAME day have no knowable order. Buys are replayed first,
+// because that is what keeps cost basis right. The cost is that a same-day round trip
+// followed by a same-day re-entry merges into one trade instead of two — it pools, which is
+// the old behaviour, rather than mis-stamping a basis. Only reachable by day-trading one
+// ticker in and out and back in within a single session.
+function splitStockEpisodes(g) {
+  const mk = () => ({ key:'', ticker:g.ticker, broker:g.broker, ccy:g.ccy, name:g.name,
+                      buys:[], sells:[], divs:[] });
+  const eps = [];
+  let cur = null, qty = 0, bought = 0;
+  for (const e of _replayOrder([...g.buys, ...g.sells], x => x.kind === 'sell')) {
+    if (e.kind === 'sell') {
+      // A sale with nothing open — a buy missing from the history, or an oversell. It belongs
+      // to the trade before it, never to a new one, and must never be silently dropped.
+      if (!cur) { if (eps.length) cur = eps[eps.length-1]; else { cur = mk(); eps.push(cur); } }
+      cur.sells.push(e);
+      qty -= _sn(e.shares);
+    } else {
+      if (!cur) { cur = mk(); eps.push(cur); qty = 0; bought = 0; }
+      cur.buys.push(e);
+      qty += _sn(e.shares); bought += _sn(e.shares);
+    }
+    // Flat → this trade is finished and sealed. The next buy opens a fresh one.
+    if (snapRemaining(qty, bought) <= 0) { cur = null; qty = 0; bought = 0; }
+  }
+  if (!eps.length) eps.push(mk());          // dividends but no trades — still worth a row
+  // A dividend belongs to whichever trade was running when it was paid. One that arrives
+  // after an exit (record date inside the trade, payment after) falls to the latest trade
+  // that had already started by then, which is the one that earned it.
+  const startOf = ep => ep.buys.length ? _dayOf(ep.buys[0]) : '';
+  for (const d of g.divs) {
+    const day = _dayOf(d);
+    let idx = 0;
+    for (let i=0;i<eps.length;i++) if (startOf(eps[i]) <= day) idx = i;
+    eps[idx].divs.push(d);
+  }
+  eps.forEach((ep,i) => {
+    ep.key = g.key+'#'+i; ep.epIndex = i+1; ep.epCount = eps.length;
+    ep.epStart = startOf(ep) || null;
+    const all = _replayOrder([...ep.buys, ...ep.sells], x => x.kind === 'sell');
+    ep.epEnd = all.length ? all[all.length-1].date : null;
+  });
+  return eps;
+}
 function stockGroups() {
   const map = new Map();
   for (const e of S.stocks) {
@@ -3958,7 +4031,9 @@ function stockGroups() {
     if (e.name && !g.name) g.name=e.name;
     if (e.kind==='sell') g.sells.push(e); else if (e.kind==='dividend') g.divs.push(e); else g.buys.push(e);
   }
-  return [...map.values()];
+  const out = [];
+  for (const g of map.values()) out.push(...splitStockEpisodes(g));
+  return out;
 }
 function stockMetrics(g) {
   const totalBought=g.buys.reduce((s,b)=>s+(_sn(b.shares)),0);
@@ -4023,9 +4098,20 @@ function renderStocks() {
   if (!S.stocks.length) { table.style.display='none'; empty.style.display='block'; renderStockStats([]); return; }
   table.style.display=''; empty.style.display='none';
   let ms = stockGroups().map(stockMetrics);
+  // Row handlers act on one episode, not on every entry the ticker ever had — so keep the
+  // full (unfiltered) set addressable by key.
+  _stockEps = new Map(ms.map(g=>[g.key,g]));
   if (S.stockFilter!=='all') ms = ms.filter(g=>g.broker===S.stockFilter);
-  ms.sort((a,b)=>(b.marketValue||b.remainingCost||0)-(a.marketValue||a.remainingCost||0));
-  body.innerHTML = ms.map(stockRowHtml).join('') || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;">No positions in this portfolio.</td></tr>';
+  const open   = ms.filter(g=>g.remainingQty>0).sort((a,b)=>(b.marketValue||b.remainingCost||0)-(a.marketValue||a.remainingCost||0));
+  const closed = ms.filter(g=>g.remainingQty<=0).sort((a,b)=>new Date(b.epEnd||0)-new Date(a.epEnd||0));
+  let html = open.map(stockRowHtml).join('');
+  // Finished trades sit below the live book under their own heading, so a closed round-trip
+  // can never be mistaken for a position you still hold.
+  if (closed.length) {
+    html += `<tr class="section-divider"><td colspan="7">Closed Trades <span>${closed.length}</span></td></tr>`
+          + closed.map(stockRowHtml).join('');
+  }
+  body.innerHTML = html || '<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:20px;">No positions in this portfolio.</td></tr>';
   renderStockStats(ms);
 }
 function renderStockStats(ms) {
@@ -4154,21 +4240,30 @@ function stockRowHtml(g) {
       + ` <span style="font-size:11px;color:var(--muted);">open</span>`
       + `${pct!=null?` <span style="font-size:11px;">(${g.unrealized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}${sub}`;
   } else pnlCellH=`<span class="neutral">—</span>${sub}`;
+  // Deletes THIS trade only. Removing everything the ticker ever did would take the other
+  // trades with it — the exact pooling mistake this split exists to undo.
+  const delTitle = g.epCount>1 ? `Remove trade ${g.epIndex} of ${g.epCount} only` : 'Remove';
+  const delBtn = `<button class="action-btn del" title="${delTitle}" onclick="delStockEpisode('${g.key}')">×</button>`;
   const actions = closed
-    ? `<button class="action-btn del" title="Remove" onclick="delStock('${g.broker}','${g.ticker}')">×</button>`
+    ? delBtn
     : `<button class="action-btn" title="Sell" onclick="prefillSell('${g.ticker}','${g.ccy}','${g.broker}')">Sell</button>
        <button class="action-btn" title="Refresh price" onclick="refreshStockPrices()">↻</button>
-       <button class="action-btn del" title="Remove" onclick="delStock('${g.broker}','${g.ticker}')">×</button>`;
+       ${delBtn}`;
   // Any position with a purchase behind it can expand. It used to take a sell or a second
   // buy lot, which meant a single-lot holding had no way to show — or correct — its buy date.
   const expandable = g.buys.length>0 || g.sells.length>0;
   const expanded = expandable && stockExpanded.has(g.key);
   const caret = !expandable ? '' : `<span class="pos-caret">${expanded?'▾':'▸'}</span>`;
+  // When a ticker has been traded more than once, say which trade this row is and when it
+  // ran — otherwise two ORCL rows are indistinguishable at a glance.
+  const epBadge = g.epCount>1 ? `<span class="closed-badge" title="Trade ${g.epIndex} of ${g.epCount} in ${esc(g.ticker)}">TRADE ${g.epIndex}/${g.epCount}</span>` : '';
+  const epWhen = g.epCount>1 && g.epStart
+    ? ` · ${fmtDate(g.epStart)}${closed && g.epEnd ? ` – ${fmtDate(g.epEnd)}` : ' →'}` : '';
   const assetInner = `${caret}
         ${iconHtml('https://assets.parqet.com/logos/symbol/'+encodeURIComponent(g.ticker)+'?format=png', g.ticker, 'var(--blue)')}
         <div>
-          <div class="asset-name">${esc(g.ticker)}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
-          <div class="asset-sub">${esc(g.name||'')} · ${esc(acctLabel(g.broker))}${expandable?` · ${expanded?'hide':'show'} buys & sells`:''}</div>
+          <div class="asset-name">${esc(g.ticker)}${epBadge}${closed?'<span class="closed-badge">CLOSED</span>':''}</div>
+          <div class="asset-sub">${esc(g.name||'')} · ${esc(acctLabel(g.broker))}${epWhen}${expandable?` · ${expanded?'hide':'show'} buys & sells`:''}</div>
         </div>`;
   const assetCell = expandable
     ? `<div class="asset-cell pos-toggle" onclick="toggleStockGroup('${g.key}')" title="${expanded?'Hide':'Show'} buys & sells">${assetInner}</div>`
@@ -4290,11 +4385,10 @@ function stampSaleBasis() {
   // purchase it came from — which would replay against an empty pool and book a zero
   // cost basis (turning a $62 profit into a $162 one). You cannot sell what you have not
   // bought: within a day, buys always come first.
-  const dayOf = x => (x.date || '').slice(0,10);
-  const inOrder = (evts, isSellFn) => evts.slice().sort((a,b) =>
-    dayOf(a).localeCompare(dayOf(b))
-    || (isSellFn(a) ? 1 : 0) - (isSellFn(b) ? 1 : 0)
-    || new Date(a.date) - new Date(b.date));
+  // _replayOrder (see splitStockEpisodes) is that order. Shared deliberately: episode
+  // boundaries and stamped basis must be derived from the same replay, or a trade could be
+  // cut at a point its own cost basis disagrees with.
+  const inOrder = _replayOrder;
 
   // ── Crypto (S.trades): basis in USD ──
   const cryptoGroups = new Map();
