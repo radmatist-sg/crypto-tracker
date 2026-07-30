@@ -509,6 +509,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
   <div style="display:flex;justify-content:flex-end;margin-bottom:10px;gap:6px;align-items:center;flex-wrap:wrap;">
     <button class="filter-btn" id="sv-current" onclick="setView('current')">Current</button>
     <button class="filter-btn" id="sv-alltime" onclick="setView('alltime')">All-time</button>
+    <span id="fx-chip" style="margin-left:8px;"></span>
     <span style="font-size:12px;color:var(--muted);margin-left:8px;">Totals in</span>
     <button class="filter-btn" id="ccy-usd" onclick="setBaseCcy('USD')">USD</button>
     <button class="filter-btn" id="ccy-sgd" onclick="setBaseCcy('SGD')">SGD</button>
@@ -717,14 +718,19 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
     <div id="lot-modal-summary" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:18px;font-size:12px;color:var(--muted);line-height:1.9;"></div>
     <div class="form-grid">
       <div class="form-row"><label id="lot-shares-label">Shares</label><input type="number" id="lot-shares" step="0.0001" placeholder="0"></div>
-      <div class="form-row"><label>Price per share</label><input type="number" id="lot-price" step="0.01" placeholder="0"></div>
+      <div class="form-row"><label>Price per share</label><input type="number" id="lot-price" step="0.01" placeholder="0" oninput="updateLotFxHint()"></div>
       <div class="form-row" id="lot-ccy-row">
         <label>Currency</label>
-        <select id="lot-ccy"><option value="USD">USD</option><option value="SGD">SGD</option></select>
+        <select id="lot-ccy" onchange="updateLotFxHint()"><option value="USD">USD</option><option value="SGD">SGD</option></select>
       </div>
       <div class="form-row"><label>Fees</label><input type="number" id="lot-fees" step="0.01" placeholder="0"></div>
-      <div class="form-row" style="grid-column:1 / -1;"><label id="lot-date-label">Date bought</label><input type="date" id="lot-date"></div>
+      <div class="form-row" style="grid-column:1 / -1;"><label id="lot-date-label">Date bought</label><input type="date" id="lot-date" onchange="updateLotFxHint()"></div>
+      <div class="form-row" id="lot-fx-row" style="grid-column:1 / -1;">
+        <label>Execution price per share, USD <span style="opacity:.6;font-weight:400;">— optional</span></label>
+        <input type="number" id="lot-usd" step="0.0001" placeholder="from your contract note" oninput="updateLotFxHint()">
+      </div>
     </div>
+    <div id="lot-fx-hint" style="font-size:11px;color:var(--muted);margin:10px 0 0;line-height:1.6;"></div>
     <div id="lot-ccy-hint" style="font-size:11px;color:var(--muted);margin:10px 0 0;line-height:1.6;"></div>
     <div style="display:flex;gap:10px;margin-top:20px;">
       <button class="btn btn-secondary" style="flex:1;" onclick="closeLotModal()">Cancel</button>
@@ -874,6 +880,8 @@ function isStable(ccy) { return STABLECOINS.has(ccy); }
 let S = { trades:[], wallets:[], keys:{eth:'',base:'',arb:'',helius:'',jupiter:'',opensea:'',finnhub:''}, filter:'all', chain:null, parsed:null, ethUsd:0, solUsd:0,
   sync:{url:'',key:'',code:''}, updatedAt:0, tombstones:{},
   stocks:[], stockPx:{}, baseCcy:'USD', fx:{ SGD:1.35 },     // stocks module: trades/sells/income, last prices, base ccy, USD→SGD rate
+  fxMeta:{ date:null, ts:0, src:'fallback' },                // where S.fx.SGD came from: live | manual | stale | fallback. Never let a guess pass for a quote.
+  fxHist:{},                                                 // 'YYYY-MM-DD' → USD→SGD close that day. A rate belongs to a date, not to the app.
   acctNames:{}, stockFilter:'all',                            // custom portfolio labels per broker; current stocks filter (runtime)
   assetImg:{}, view:'current',                                // cached logos; summary view 'current' (open holdings) vs 'alltime'
   pendingOrders:[] };                                          // live broker TP/SL (exit) orders, mirrored from the moomoo CSV on import
@@ -1055,6 +1063,8 @@ function loadState() {
     if (d.stockPx) S.stockPx = d.stockPx;
     if (d.baseCcy) S.baseCcy = d.baseCcy;
     if (d.fx) S.fx = { ...S.fx, ...d.fx };
+    if (d.fxMeta) S.fxMeta = { ...S.fxMeta, ...d.fxMeta };
+    if (d.fxHist) S.fxHist = { ...S.fxHist, ...d.fxHist };
     if (d.acctNames) S.acctNames = d.acctNames;
     if (d.assetImg) S.assetImg = d.assetImg;
     if (d.view) S.view = d.view;
@@ -1074,7 +1084,7 @@ function loadState() {
 // Write to this device's local storage only (no cloud push).
 function persistLocal() {
   localStorage.setItem('ctrack', JSON.stringify({ trades: S.trades, wallets: S.wallets, keys: S.keys, ethUsd: S.ethUsd, solUsd: S.solUsd, sync: S.sync, updatedAt: S.updatedAt,
-    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view, tombstones: S.tombstones, pendingOrders: S.pendingOrders }));
+    stocks: S.stocks, stockPx: S.stockPx, baseCcy: S.baseCcy, fx: S.fx, fxMeta: S.fxMeta, fxHist: S.fxHist, acctNames: S.acctNames, assetImg: S.assetImg, view: S.view, tombstones: S.tombstones, pendingOrders: S.pendingOrders }));
 }
 // Save a change: stamp it, store locally, and queue a cloud sync.
 function persist() {
@@ -1145,7 +1155,7 @@ async function pullRemote() {
 async function pushRemote() {
   const { error } = await sb.from('portfolios').upsert(
     { user_id: _user.id, data: { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, solUsd:S.solUsd, updatedAt:S.updatedAt,
-        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, tombstones:S.tombstones, pendingOrders:S.pendingOrders }, updated_at: new Date().toISOString() },
+        stocks:S.stocks, stockPx:S.stockPx, baseCcy:S.baseCcy, fx:S.fx, fxMeta:S.fxMeta, fxHist:S.fxHist, acctNames:S.acctNames, assetImg:S.assetImg, tombstones:S.tombstones, pendingOrders:S.pendingOrders }, updated_at: new Date().toISOString() },
     { onConflict: 'user_id' });
   if (error) throw error;
 }
@@ -1195,6 +1205,8 @@ async function doPull(announce) {
       if (remote.solUsd) S.solUsd = remote.solUsd;
       if (remote.baseCcy) S.baseCcy = remote.baseCcy;
       if (remote.fx)      S.fx = { ...S.fx, ...remote.fx };
+      if (remote.fxMeta)  S.fxMeta = { ...S.fxMeta, ...remote.fxMeta };
+      if (remote.fxHist)  S.fxHist = { ...S.fxHist, ...remote.fxHist };   // dated closes never change, so a union is always safe
       if (remote.acctNames) S.acctNames = remote.acctNames;
       if (remote.assetImg)  S.assetImg = remote.assetImg;
       if (Array.isArray(remote.pendingOrders)) S.pendingOrders = remote.pendingOrders;  // live-state mirror; newest writer's set wins
@@ -3558,7 +3570,7 @@ async function testJupiter() {
 // ─── DATA ──────────────────────────────────────────────────
 function exportData() {
   const payload = { trades:S.trades, wallets:S.wallets, keys:S.keys, ethUsd:S.ethUsd, solUsd:S.solUsd, stocks:S.stocks, stockPx:S.stockPx,
-    baseCcy:S.baseCcy, fx:S.fx, acctNames:S.acctNames, assetImg:S.assetImg, pendingOrders:S.pendingOrders };
+    baseCcy:S.baseCcy, fx:S.fx, fxMeta:S.fxMeta, fxHist:S.fxHist, acctNames:S.acctNames, assetImg:S.assetImg, pendingOrders:S.pendingOrders };
   const blob = new Blob([JSON.stringify(payload,null,2)],{type:'application/json'});
   const a = Object.assign(document.createElement('a'),{
     href:URL.createObjectURL(blob),
@@ -3581,6 +3593,8 @@ function importData(e) {
       if (d.stockPx) S.stockPx = d.stockPx;
       if (d.baseCcy) S.baseCcy = d.baseCcy;
       if (d.fx)      S.fx = { ...S.fx, ...d.fx };
+      if (d.fxMeta)  S.fxMeta = { ...S.fxMeta, ...d.fxMeta };
+      if (d.fxHist)  S.fxHist = { ...S.fxHist, ...d.fxHist };
       if (d.acctNames) S.acctNames = d.acctNames;
       if (d.assetImg)  S.assetImg = d.assetImg;
       if (Array.isArray(d.pendingOrders)) S.pendingOrders = d.pendingOrders;
@@ -3815,20 +3829,112 @@ function addStockManual() {
 }
 
 // ── FX + live prices ──
+// api.frankfurter.app now 301-redirects to api.frankfurter.dev, and the redirect response
+// carries no Access-Control-Allow-Origin header — so the browser refuses to follow it and the
+// fetch throws. curl follows it happily, which is exactly why this hid for months: every SGD
+// figure was quietly converted at the 1.35 fallback (~4.9% high) with nothing on screen saying so.
+// Hit the .dev host directly, and never let a failure pass silently again.
+const FX_HOST = 'https://api.frankfurter.dev/v1';
 async function fetchFx() {
   try {
-    const r = await fetch('https://api.frankfurter.app/latest?from=USD&to=SGD');
-    if (r.ok) { const d = await r.json(); if (d.rates?.SGD) { S.fx.SGD = d.rates.SGD; persistLocal(); } }
-  } catch {}
+    const r = await fetch(`${FX_HOST}/latest?from=USD&to=SGD`);
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const d = await r.json();
+    if (!(d?.rates?.SGD > 0)) throw new Error('no SGD rate in response');
+    S.fx.SGD = d.rates.SGD;
+    S.fxMeta = { date: d.date || null, ts: Date.now(), src: 'live' };
+    persistLocal();
+  } catch {
+    // A rate you set by hand is a deliberate choice — don't overwrite its provenance.
+    if (S.fxMeta?.src !== 'manual') {
+      S.fxMeta = { ...(S.fxMeta||{}), ts: S.fxMeta?.ts || 0, src: S.fxMeta?.src === 'live' ? 'stale' : 'fallback' };
+      persistLocal();
+    }
+  }
   return S.fx.SGD;
+}
+// The rate that applied on a given date. ECB publishes one close per business day and it
+// never changes, so anything cached here is cached for good — a date is fetched once, ever.
+async function fetchFxHist(dates) {
+  const want = [...new Set(dates.filter(Boolean).map(d => String(d).slice(0,10)))]
+    .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d) && !(S.fxHist[d] > 0)).sort();
+  if (!want.length) return;
+  // Start a week early so a trade on a Monday holiday still has a prior close to roll back to.
+  const from = new Date(want[0] + 'T00:00:00Z');
+  from.setUTCDate(from.getUTCDate() - 7);
+  try {
+    const r = await fetch(`${FX_HOST}/${from.toISOString().slice(0,10)}..${want[want.length-1]}?from=USD&to=SGD`);
+    if (!r.ok) return;
+    const d = await r.json(), rates = d?.rates || {}, days = Object.keys(rates).sort();
+    if (!days.length) return;
+    for (const day of want) {
+      if (rates[day]?.SGD > 0) { S.fxHist[day] = rates[day].SGD; continue; }
+      // Weekends and holidays have no close of their own — use the last published one,
+      // which is the rate a broker would have been working from that morning.
+      let prev = null;
+      for (const k of days) { if (k <= day) prev = k; else break; }
+      if (rates[prev]?.SGD > 0) S.fxHist[day] = rates[prev].SGD;
+    }
+    persistLocal();
+  } catch {}
+}
+// ── Per-trade FX ───────────────────────────────────────────
+// A rate is a property of the fill, not of the app. One global slot can't hold February and
+// July at once, so converting a five-month-old cost at today's rate quietly reprices it.
+// Precedence: what the broker actually charged > the market close that day > today's rate.
+function _fxDay(d) { const t = d instanceof Date ? d : new Date(d); return isNaN(t) ? '' : t.toISOString().slice(0,10); }
+function lotFx(e) {
+  if (e?.fxAt > 0) return { rate:+e.fxAt, src: e.fxSrc || 'actual' };
+  const h = S.fxHist[String(e?.date || '').slice(0,10)];
+  if (h > 0) return { rate:h, src:'ecb' };
+  return { rate: S.fx.SGD || 1.35, src:'today' };
 }
 function toUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a/(S.fx.SGD||1.35) : a; }
 function fromUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a*(S.fx.SGD||1.35) : a; }
 function toBase(a, ccy) { const u=toUSD(a,ccy); return S.baseCcy==='USD' ? u : u*(S.fx.SGD||1.35); }
+// Convert an amount recorded on one entry, using that entry's own rate rather than today's.
+// Use this for anything historical — cost, proceeds, dividends. Market value still converts
+// at today's rate, because that is what it is worth today; the gap between the two is real
+// FX gain or loss, and collapsing it to one rate is what hides it.
+function toBaseAt(a, e) {
+  const ccy = e?.ccy || 'USD';
+  if (ccy === S.baseCcy) return a;                       // native — nothing to convert
+  const r = lotFx(e).rate;
+  const u = ccy === 'SGD' ? a/r : ccy === 'USD' ? a : toUSD(a, ccy);
+  return S.baseCcy === 'USD' ? u : u*r;
+}
 // A quote is worth nothing without knowing what currency it's in. SPY at 743 is $743,
 // not S$743 — applying it to an SGD-tagged position understated that holding by 35%.
 function convCcy(a, from, to) { return (!from || from===to) ? a : fromUSD(toUSD(a, from), to); }
 function setBaseCcy(c) { S.baseCcy = c; persist(); renderStocks(); renderPortfolio(); }
+// The rate every conversion runs on, stated on screen with where it came from. A wrong rate
+// that looks authoritative is worse than no rate — if it isn't live, the chip says so in amber.
+function renderFxChip() {
+  const el = document.getElementById('fx-chip'); if (!el) return;
+  const m = S.fxMeta || {}, r = S.fx.SGD || 1.35, trusted = m.src === 'live' || m.src === 'manual';
+  const note = m.src === 'manual' ? 'set by you'
+    : m.src === 'live'  ? (m.date || 'live')
+    : m.src === 'stale' ? `couldn't refresh${m.date ? ` · last ${m.date}` : ''}`
+    : 'fallback — never fetched';
+  const col = trusted ? 'var(--muted)' : 'var(--amber,#d9a441)';
+  el.innerHTML = `<span onclick="editFxRate()" title="USD→SGD rate used for current values. Click to set it by hand or go back to live."
+    style="cursor:pointer;font-size:11px;padding:4px 9px;border-radius:6px;border:1px solid ${trusted?'var(--border)':'var(--amber,#d9a441)'};color:${col};"
+    >${trusted?'':'⚠ '}USD/SGD ${fmt(r,4)} · ${note}</span>`;
+}
+function editFxRate() {
+  const raw = prompt('USD → SGD rate for current values.\n\nLeave blank to go back to the live rate.', fmt(S.fx.SGD || 1.35, 4));
+  if (raw === null) return;
+  if (!raw.trim()) {
+    S.fxMeta = { ...S.fxMeta, src:'fallback' }; persist();
+    fetchFx().then(() => { renderStocks(); renderPortfolio();
+      toast(S.fxMeta.src === 'live' ? `Live rate ${fmt(S.fx.SGD,4)} ✓` : '⚠ Still can\'t reach the rate service.'); });
+    return;
+  }
+  const v = parseFloat(raw);
+  if (!(v > 0)) { toast('Enter a valid rate.'); return; }
+  S.fx.SGD = v; S.fxMeta = { date:new Date().toISOString().slice(0,10), ts:Date.now(), src:'manual' };
+  persist(); renderStocks(); renderPortfolio(); toast('Rate set ✓');
+}
 
 // Finnhub's quote endpoint returns the exchange's own currency (SPY→USD, D05.SI→SGD) and
 // never tells you which one. profile2 does. Cached on the price entry: one call per ticker, ever.
@@ -3846,6 +3952,7 @@ async function refreshStockPrices() {
   if (!tickers.length) return;
   toast('Refreshing stock prices…');
   await fetchFx();
+  await fetchFxHist(S.stocks.map(e => e.date));
   for (const tk of tickers) {
     try {
       const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
@@ -3898,12 +4005,40 @@ function editLot(id) {
   document.getElementById('lot-ccy').value    = ccy;
   document.getElementById('lot-fees').value   = _sn(b.fees) || '';
   document.getElementById('lot-date').value   = (b.date||'').slice(0,10);
+  // Both legs of the fill are on every contract note, and their ratio is the rate the broker
+  // actually charged — spread included. No market lookup can reproduce that, so if it's
+  // available it beats everything else.
+  document.getElementById('lot-usd').value = (b.fxAt > 0 && b.fxSrc === 'actual' && _sn(b.price))
+    ? fmt(_sn(b.price)/(+b.fxAt), 4).replace(/,/g,'') : '';
+  updateLotFxHint();
   document.getElementById('lot-ccy-hint').textContent = isSale
     ? `Currency is set on the position — edit a purchase to change it for the whole ${b.ticker} holding.`
     : (px?.ccy
       ? `Live quotes for ${b.ticker} come back in ${px.ccy}. The currency here is the one you actually paid in — if they differ the price is converted.`
       : `Refresh prices to confirm which currency ${b.ticker} is quoted in.`);
   document.getElementById('lot-modal').style.display = 'flex';
+}
+// Show which rate this trade will actually be converted at, and where that rate comes from —
+// so an estimate is never mistaken for the real thing.
+function updateLotFxHint() {
+  const b = S.stocks.find(x => x.id===_editLotId); if (!b) return;
+  const ccy = document.getElementById('lot-ccy')?.value || b.ccy || 'USD';
+  const row = document.getElementById('lot-fx-row'), hint = document.getElementById('lot-fx-hint');
+  // Only SGD-booked trades need a rate to reach a USD figure (and vice versa).
+  const needed = ccy === 'SGD';
+  row.style.display = needed ? '' : 'none';
+  if (!needed) { hint.textContent = ''; return; }
+  const usd = _sn(document.getElementById('lot-usd').value), sgd = _sn(document.getElementById('lot-price').value);
+  const day = toISODate(document.getElementById('lot-date').value) || (b.date||'').slice(0,10);
+  if (usd > 0 && sgd > 0) {
+    hint.innerHTML = `Rate for this trade: <strong>${fmt(sgd/usd, 4)}</strong> — what you were actually charged, spread included.`;
+    hint.style.color = 'var(--muted)'; return;
+  }
+  const h = S.fxHist[String(day).slice(0,10)];
+  hint.innerHTML = h > 0
+    ? `Leave blank and this trade uses the market close for ${String(day).slice(0,10)}: <strong>${fmt(h,4)}</strong>. That's the mid-market rate — your broker's spread isn't in it, so fill the box above if you have the note.`
+    : `⚠ No rate known for ${String(day).slice(0,10)} — this trade falls back to <strong>today's</strong> ${fmt(S.fx.SGD||1.35,4)}, which reprices the cost every time FX moves.`;
+  hint.style.color = h > 0 ? 'var(--muted)' : 'var(--amber,#d9a441)';
 }
 function closeLotModal() { document.getElementById('lot-modal').style.display='none'; _editLotId=null; }
 function saveLotEdit() {
@@ -3914,6 +4049,12 @@ function saveLotEdit() {
   const date = toISODate(document.getElementById('lot-date').value);
   if (!date) { toast('Enter the date.'); return; }
 
+  // The rate this fill was actually done at, derived from the two legs on the contract note.
+  // Stored on the entry, because that is what it is a fact about — not about the app or today.
+  const _lotRate = (px, ccy) => {
+    const usd = _sn(document.getElementById('lot-usd').value);
+    return (ccy === 'SGD' && usd > 0 && px > 0) ? { fxAt: px/usd, fxSrc: 'actual' } : { fxAt: undefined, fxSrc: undefined };
+  };
   if (b.kind==='sell') {
     // Can't sell more than the position ever held.
     const bought = S.stocks.filter(x => (x.kind==='buy'||!x.kind) && (x.ticker||'')===(b.ticker||'')
@@ -3924,7 +4065,7 @@ function saveLotEdit() {
     // The frozen basis was fixed against the old quantity and date, so drop it and let
     // stampSaleBasis replay the position and re-derive it — same rule the crypto side uses.
     delete b.basis; delete b.avgCostAt;
-    Object.assign(b, { shares, price, fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now() });
+    Object.assign(b, { shares, price, fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now(), ..._lotRate(price, b.ccy||'USD') });
     stampSaleBasis(); persist(); closeLotModal(); renderStocks();
     toast('Sale updated ✓'); return;
   }
@@ -3943,7 +4084,7 @@ function saveLotEdit() {
   if (sold > otherBuys + shares + 1e-9) { toast(`That leaves fewer shares than the ${fmt(sold,4)} already sold.`); return; }
   if (newCcy !== oldCcy) for (const x of group) { x.ccy = newCcy; x._m = Date.now(); }
   Object.assign(b, { shares, price, ccy:newCcy,
-    fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now() });
+    fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now(), ..._lotRate(price, newCcy) });
   stampSaleBasis(); persist(); closeLotModal(); renderStocks();
   toast('Purchase updated ✓');
 }
@@ -4125,9 +4266,32 @@ function stockMetrics(g) {
   const recoveredPct = totalCost ? Math.min(100, cashBack/totalCost*100) : 0;
   const stillOut = Math.max(0, totalCost - cashBack);
   const breakEven = remainingQty ? stillOut/remainingQty : null;
+  // ── Base-currency figures, converted at the rate of the trade that produced each one ──
+  // Cost carries the rate you actually paid at; market value carries today's. Previously both
+  // went through one global rate, so an SGD cost was silently repriced every time FX moved.
+  const costRate = (() => {                       // cost-weighted rate across this trade's buys
+    let w = 0, x = 0;
+    for (const b of g.buys) { const c = _sn(b.shares)*_sn(b.price)+_sn(b.fees); w += c; x += c*lotFx(b).rate; }
+    return w ? x/w : (S.fx.SGD || 1.35);
+  })();
+  const costE = { ccy:g.ccy, fxAt:costRate }, nowE = { ccy:g.ccy, fxAt:(S.fx.SGD || 1.35) };
+  const baseTotalInvested = toBaseAt(totalCost, costE);
+  const baseRemainingCost = toBaseAt(remainingCost, costE);
+  const baseMarketValue   = marketValue!=null ? toBaseAt(marketValue, nowE) : null;
+  const baseProceeds      = g.sells.reduce((s,x)=>s+toBaseAt(_sn(x.shares)*_sn(x.price)-_sn(x.fees), x), 0);
+  const baseDividends     = g.divs.reduce((s,d)=>s+toBaseAt(_sn(d.amount), d), 0);
+  const baseRealized      = baseProceeds - toBaseAt(soldBasis, costE);
+  const baseUnrealized    = baseMarketValue!=null ? baseMarketValue - baseRemainingCost : null;
+  const baseOpenVal       = baseMarketValue!=null ? baseMarketValue : (remainingQty>0 ? baseRemainingCost : 0);
+  const baseAbsReturn     = baseProceeds + baseDividends + baseOpenVal - baseTotalInvested;
+  // Flag a position whose cost is still being converted at today's rate — the number is a
+  // placeholder until the real rate is known, and it shouldn't look settled.
+  const fxEstimated = g.ccy !== S.baseCcy && g.buys.some(b => lotFx(b).src === 'today');
   const m = { ...g, totalBought, avgCost, soldQty, remainingQty, remainingCost, realized, dividends,
     proceeds, totalInvested:totalCost, px, pxRaw, pxCcy, pxUnsure, pxMismatch, marketValue, unrealized, absReturn, returnPct,
-    totalPnl, totalPnlPct, cashBack, recoveredPct, stillOut, breakEven, soldBasis };
+    totalPnl, totalPnlPct, cashBack, recoveredPct, stillOut, breakEven, soldBasis,
+    costRate, fxEstimated, baseTotalInvested, baseRemainingCost, baseMarketValue, baseProceeds,
+    baseDividends, baseRealized, baseUnrealized, baseAbsReturn };
   m.annual = xirr(stockFlows(g, m));
   return m;
 }
@@ -4147,6 +4311,7 @@ function setStockFilter(b) { S.stockFilter = b; renderStocks(); }
 function renderStocks() {
   document.getElementById('ccy-usd').classList.toggle('active', S.baseCcy==='USD');
   document.getElementById('ccy-sgd').classList.toggle('active', S.baseCcy==='SGD');
+  renderFxChip();
   renderStockFilterBar();
   const body=document.getElementById('stocks-body'), table=document.getElementById('stocks-table'), empty=document.getElementById('stocks-empty');
   if (!S.stocks.length) { table.style.display='none'; empty.style.display='block'; renderStockStats([]); return; }
@@ -4173,20 +4338,24 @@ function renderStockStats(ms) {
   // A position with no price used to have its cost counted as its value, so it contributed
   // exactly zero P&L and looked settled. Unrealized is now measured over priced holdings only,
   // and anything unpriced is reported rather than blended away.
-  let pricedCost=0, pricedValue=0, unpriced=0, unsure=0, mismatched=0;
+  let pricedCost=0, pricedValue=0, unpriced=0, unsure=0, mismatched=0, fxEst=0;
   const pflows=[];
   for (const g of ms) {
     if (g.remainingQty>0) {
-      invested+=toBase(g.remainingCost,g.ccy);
-      value+=toBase(g.marketValue!=null?g.marketValue:g.remainingCost,g.ccy);
-      if (g.marketValue!=null) { pricedCost+=toBase(g.remainingCost,g.ccy); pricedValue+=toBase(g.marketValue,g.ccy); }
+      invested+=g.baseRemainingCost;
+      value+=g.baseMarketValue!=null?g.baseMarketValue:g.baseRemainingCost;
+      if (g.baseMarketValue!=null) { pricedCost+=g.baseRemainingCost; pricedValue+=g.baseMarketValue; }
       else unpriced++;
       if (g.pxUnsure) unsure++;
       if (g.pxMismatch) mismatched++;
+      if (g.fxEstimated) fxEst++;
     }
-    realizedIncome += toBase(g.realized+g.dividends, g.ccy);
-    absSum += toBase(g.absReturn, g.ccy); investedSum += toBase(g.totalInvested, g.ccy);
-    for (const f of stockFlows(g, g)) pflows.push({ amount: toBase(f.amount, g.ccy), date: f.date });
+    realizedIncome += g.baseRealized + g.baseDividends;
+    absSum += g.baseAbsReturn; investedSum += g.baseTotalInvested;
+    // Each cash flow converts at the rate of the day it happened, so the annualised figure
+    // isn't distorted by restating years of history at this morning's rate.
+    for (const f of stockFlows(g, g))
+      pflows.push({ amount: toBaseAt(f.amount, { ccy:g.ccy, date: _fxDay(f.date) }), date: f.date });
   }
   let netFunded=0; const fundFlows=[];
   for (const e of S.stocks) {
@@ -4194,12 +4363,12 @@ function renderStockStats(ms) {
     if (!inScope) continue;
     // income (dividends w/o ticker, interest, fees) → folds into profit
     if (e.kind==='interest' || e.kind==='fee' || (e.kind==='dividend'&&!e.ticker)) {
-      const v = toBase(_sn(e.amount), e.ccy||'USD');
+      const v = toBaseAt(_sn(e.amount), e);
       realizedIncome += v; absSum += v; pflows.push({ amount:v, date:new Date(e.date) });
     }
     // funding → net deposits + funded-return cash flows
     if (e.kind==='deposit' || e.kind==='withdraw') {
-      const v = toBase(_sn(e.amount), e.ccy||'USD');
+      const v = toBaseAt(_sn(e.amount), e);
       const signed = e.kind==='deposit' ? v : -v;
       netFunded += signed;
       fundFlows.push({ amount:-signed, date:new Date(e.date) });   // deposit = cash out of your pocket
@@ -4207,7 +4376,7 @@ function renderStockStats(ms) {
   }
   const unreal=pricedValue-pricedCost, sym=ccySym(S.baseCcy);
   const priceWarn = [unpriced?`${unpriced} unpriced`:'', mismatched?`⚠ ${mismatched} currency mismatch`:'',
-    unsure?`${unsure} currency unconfirmed`:''].filter(Boolean).join(' · ');
+    unsure?`${unsure} currency unconfirmed`:'', fxEst?`⚠ ${fxEst} at today's FX`:''].filter(Boolean).join(' · ');
   const totalProfit = absSum;                                   // investment P&L + income (incl. closed)
   const overallPct = investedSum ? totalProfit/investedSum*100 : null;
   const annual = xirr(pflows);
@@ -4262,7 +4431,7 @@ function stockRowHtml(g) {
   const cashedOut = partSold && g.cashBack>0.005
     ? `<span style="display:block;color:var(--muted);font-size:11px;" title="Sale proceeds${g.dividends>0.005?' + dividends':''} already in hand">+${sym}${fmt(g.cashBack,2)} cashed out</span>` : '';
   const valCell = closed ? '<span class="neutral">—</span>'
-    : g.marketValue!=null ? `${sym}${fmt(g.marketValue,2)}${g.ccy!==S.baseCcy?` <span style="color:var(--muted);font-size:11px;">${ccySym(S.baseCcy)}${fmt(toBase(g.marketValue,g.ccy),2)}</span>`:''}${cashedOut}` : `<span class="neutral">—</span>${cashedOut}`;
+    : g.marketValue!=null ? `${sym}${fmt(g.marketValue,2)}${g.ccy!==S.baseCcy?` <span style="color:var(--muted);font-size:11px;" title="At today's rate — USD/SGD ${fmt(S.fx.SGD||1.35,4)}">${ccySym(S.baseCcy)}${fmt(g.baseMarketValue,2)}</span>`:''}${cashedOut}` : `<span class="neutral">—</span>${cashedOut}`;
   // P&L cell: main figure + sub lines (realized/div, then total% · annualised)
   const subBits=[];
   if (Math.abs(g.realized)>0.005) subBits.push(`${g.realized>=0?'+':'-'}${sym}${fmt(Math.abs(g.realized),2)} real`);
@@ -4512,7 +4681,18 @@ applyPrivacy();
 updateStockForm();
 renderPortfolio();
 renderStocks();
-fetchFx().then(() => renderStocks());
+// Today's rate for current values, plus the close on every date a trade happened. Both in
+// one pass; the historical dates are one bulk call and are then cached for good.
+refreshAllFx();
+async function refreshAllFx() {
+  await fetchFx();
+  const m = S.fxMeta || {};
+  if (m.src !== 'live' && m.src !== 'manual')
+    toast(`⚠ Couldn't fetch USD/SGD — figures use ${fmt(S.fx.SGD||1.35,4)}. Click the rate to set it.`);
+  renderStocks();
+  await fetchFxHist(S.stocks.map(e => e.date));
+  renderStocks();
+}
 // Restore the login session (and pull this account's data), then refresh prices.
 initAuth()
   .then(refreshEthRate)
