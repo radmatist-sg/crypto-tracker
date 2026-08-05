@@ -1465,14 +1465,23 @@ function parseEvm(d) {
   const date = ts ? new Date(ts*1000).toISOString() : new Date().toISOString();
   const ccy  = CHAINS[chain].ccy;
 
+  // "Me" = any wallet registered in Settings → My Wallets. The submitter (`from`) is NOT
+  // always me: an airdrop or reflection is pushed by the distributor and merely pays me,
+  // and an accepted OpenSea offer is submitted by the seller. Defining me as the submitter
+  // alone made every received-but-not-submitted transfer unparseable — which is exactly
+  // the case the airdrop flow exists for. Mirrors how the sell parser already finds me.
+  const mine = myWalletAddrs().map(a => a.toLowerCase());
+  const isMine = a => mine.includes((a || '').toLowerCase());
+
   // ─── NFT received (ERC-721 or ERC-1155) ───────────────────
-  // The submitter (`from`) isn't always the buyer: on OpenSea offer-
-  // acceptances the seller submits the tx and the NFT is sent to you.
-  // So pick the NFT received by `from` if present, else take the first
-  // NFT transferred and treat its recipient as the owner (you).
+  // Prefer the NFT that landed in one of my wallets; else the one received by the
+  // submitter (an ordinary buy with no wallets registered); else take the first NFT
+  // transferred and treat its recipient as the owner (me).
   const pickNft = list => {
     if (!list.length) return null;
-    return list.find(t => t.to.toLowerCase() === from.toLowerCase()) || list[0];
+    return list.find(t => isMine(t.to))
+        || list.find(t => t.to.toLowerCase() === from.toLowerCase())
+        || list[0];
   };
   const n721  = pickNft(nfts);
   const n1155 = pickNft(e1155);
@@ -1519,16 +1528,24 @@ function parseEvm(d) {
         ? `${count} NFTs minted in this transaction (#${lotIds.join(', #')}) — ${fmt(noFee/count,4)} ${costCcy} each. They'll be added as ${count} separate lots so each can be valued and sold on its own.`
         : undefined };
   }
-  // ERC-20 token received (DEX swap)
-  const gotTok = tokens.filter(t => t.to.toLowerCase() === from.toLowerCase());
+  // ERC-20 token received (DEX swap, or an airdrop / reflection pushed to me).
+  // My own wallets are matched FIRST and the submitter only as a fallback — never both
+  // together. A distribute() call credits dozens of addresses in one transaction and the
+  // submitter can be one of them, so matching the submitter first would read someone
+  // else's payout as mine. The fallback keeps ordinary buys working with no wallets saved.
+  const toMine = tokens.filter(t => isMine(t.to));
+  const gotTok = toMine.length ? toMine
+                               : tokens.filter(t => t.to.toLowerCase() === from.toLowerCase());
   if (gotTok.length) {
     const t = gotTok[0];
+    const owner = t.to.toLowerCase();        // the wallet that received it — me
     const dec = parseInt(t.tokenDecimal||'18');
     const amount = parseInt(t.value) / 10**dec;
     let noFee = valueEth, costCcy = ccy;
     if (valueEth === 0) {
-      // Stablecoin swap — find what was sent
-      const sent = tokens.filter(x => x.from.toLowerCase() === from.toLowerCase());
+      // Stablecoin swap — find what was sent. Measured from the receiving wallet, not the
+      // submitter, so a swap routed by a relayer still reads what I actually paid.
+      const sent = tokens.filter(x => x.from.toLowerCase() === owner);
       if (sent.length) {
         const sd = parseInt(sent[0].tokenDecimal||'6');
         noFee = parseInt(sent[0].value) / 10**sd;
