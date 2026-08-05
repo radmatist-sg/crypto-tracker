@@ -1541,21 +1541,32 @@ function parseEvm(d) {
     const owner = t.to.toLowerCase();        // the wallet that received it — me
     const dec = parseInt(t.tokenDecimal||'18');
     const amount = parseInt(t.value) / 10**dec;
-    let noFee = valueEth, costCcy = ccy;
-    if (valueEth === 0) {
-      // Stablecoin swap — find what was sent. Measured from the receiving wallet, not the
-      // submitter, so a swap routed by a relayer still reads what I actually paid.
+    // tx.value is ETH spent by the SUBMITTER, and gas is paid by the SUBMITTER. When that
+    // isn't me — a relayer routed the buy, or a distributor pushed an airdrop — neither is
+    // my money, and neither may be presented as my cost. Reading the relayer's ETH as the
+    // price paid is worse than reading nothing: it looks like a real figure.
+    const iSubmitted = owner === from.toLowerCase();
+    let noFee = iSubmitted ? valueEth : 0, costCcy = ccy, note;
+    if (noFee === 0) {
+      // What did I actually pay? Whatever left MY wallet here — WETH, a stablecoin, etc.
+      // Measured from the receiving wallet, not the submitter, so a relayed swap still
+      // reads my side of it.
       const sent = tokens.filter(x => x.from.toLowerCase() === owner);
       if (sent.length) {
         const sd = parseInt(sent[0].tokenDecimal||'6');
         noFee = parseInt(sent[0].value) / 10**sd;
         costCcy = sent[0].tokenSymbol;
+      } else if (!iSubmitted) {
+        note = 'You did not submit this transaction and nothing left your wallet in it, so the '
+             + 'cost is recorded as 0 — correct for an airdrop, reflection or reward. If you '
+             + 'did pay for these tokens (a relayer or aggregator routed the buy), enter what '
+             + 'you paid below — it cannot be read from this transaction.';
       }
     }
     return { type:'coin', name:t.tokenName||'Unknown', symbol:t.tokenSymbol||'?',
       contract:t.contractAddress, tokenId:null, amount,
-      noFee, fee:gasEth, withFee:noFee+(valueEth>0?gasEth:gasEth),
-      ccy:costCcy, feeCcy:ccy, date };
+      noFee, fee: iSubmitted ? gasEth : 0, withFee: noFee + (iSubmitted ? gasEth : 0),
+      ccy:costCcy, feeCcy:ccy, date, note };
   }
   // Fallback
   if (valueEth > 0) {
