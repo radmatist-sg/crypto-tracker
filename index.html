@@ -721,7 +721,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
       <div class="form-row"><label>Price per share</label><input type="number" id="lot-price" step="0.01" placeholder="0" oninput="updateLotFxHint()"></div>
       <div class="form-row" id="lot-ccy-row">
         <label>Currency</label>
-        <select id="lot-ccy" onchange="updateLotFxHint()"><option value="USD">USD</option><option value="SGD">SGD</option></select>
+        <select id="lot-ccy" onchange="updateLotFxHint()"><option value="USD">USD</option><option value="SGD">SGD</option><option value="HKD">HKD</option></select>
       </div>
       <div class="form-row"><label>Fees</label><input type="number" id="lot-fees" step="0.01" placeholder="0"></div>
       <div class="form-row" style="grid-column:1 / -1;"><label id="lot-date-label">Date bought</label><input type="date" id="lot-date" onchange="updateLotFxHint()"></div>
@@ -3958,11 +3958,12 @@ function addStockManual() {
 const FX_HOST = 'https://api.frankfurter.dev/v1';
 async function fetchFx() {
   try {
-    const r = await fetch(`${FX_HOST}/latest?from=USD&to=SGD`);
+    const r = await fetch(`${FX_HOST}/latest?from=USD&to=SGD,HKD`);
     if (!r.ok) throw new Error('HTTP '+r.status);
     const d = await r.json();
     if (!(d?.rates?.SGD > 0)) throw new Error('no SGD rate in response');
     S.fx.SGD = d.rates.SGD;
+    if (d.rates.HKD > 0) S.fx.HKD = d.rates.HKD;   // positions can be booked in HKD too
     S.fxMeta = { date: d.date || null, ts: Date.now(), src: 'live' };
     persistLocal();
   } catch {
@@ -4010,9 +4011,16 @@ function lotFx(e) {
   if (h > 0) return { rate:h, src:'ecb' };
   return { rate: S.fx.SGD || 1.35, src:'today' };
 }
-function toUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a/(S.fx.SGD||1.35) : a; }
-function fromUSD(a, ccy) { return ccy==='USD' ? a : ccy==='SGD' ? a*(S.fx.SGD||1.35) : a; }
-function toBase(a, ccy) { const u=toUSD(a,ccy); return S.baseCcy==='USD' ? u : u*(S.fx.SGD||1.35); }
+// These knew USD and SGD and silently passed anything else straight through — so an HKD amount
+// was treated as though HK$1 were US$1, overstating it about eightfold, in whichever base was
+// selected. HKD has been on the Add form's currency list the whole time. A rate table instead of
+// two hardcoded branches: an unknown currency now returns null and is left alone visibly, rather
+// than quietly passing itself off as dollars.
+const FX_FALLBACK = { SGD:1.35, HKD:7.80 };
+function fxRate(ccy) { return ccy==='USD' ? 1 : (S.fx[ccy] > 0 ? S.fx[ccy] : (FX_FALLBACK[ccy] || null)); }
+function toUSD(a, ccy)   { const r = fxRate(ccy); return r ? a/r : a; }
+function fromUSD(a, ccy) { const r = fxRate(ccy); return r ? a*r : a; }
+function toBase(a, ccy)  { return fromUSD(toUSD(a, ccy), S.baseCcy); }
 // Convert an amount recorded on one entry, using that entry's own rate rather than today's.
 // Use this for anything historical — cost, proceeds, dividends. Market value still converts
 // at today's rate, because that is what it is worth today; the gap between the two is real
@@ -4021,8 +4029,12 @@ function toBaseAt(a, e) {
   const ccy = e?.ccy || 'USD';
   if (ccy === S.baseCcy) return a;                       // native — nothing to convert
   const r = lotFx(e).rate;
-  const u = ccy === 'SGD' ? a/r : ccy === 'USD' ? a : toUSD(a, ccy);
-  return S.baseCcy === 'USD' ? u : u*r;
+  // The per-lot rate is a USD/SGD rate — fxHist keeps one SGD close per date and nothing else —
+  // so it can only be applied to that pair. Everything else converts at today's rates: not the
+  // rate of the fill, but right in magnitude, which is the part that was broken.
+  if (ccy === 'SGD' && S.baseCcy === 'USD') return a / r;
+  if (ccy === 'USD' && S.baseCcy === 'SGD') return a * r;
+  return toBase(a, ccy);
 }
 // A quote is worth nothing without knowing what currency it's in. SPY at 743 is $743,
 // not S$743 — applying it to an SGD-tagged position understated that holding by 35%.
@@ -4268,7 +4280,12 @@ function saveLotEdit() {
     toast('Sale updated ✓'); return;
   }
 
-  const oldCcy = b.ccy || 'USD', newCcy = document.getElementById('lot-ccy').value;
+  // The dropdown offered only USD and SGD, so opening an HKD purchase set the select to a value
+  // it did not have and it landed blank. Saving then wrote that blank back, and every downstream
+  // `ccy || 'USD'` read it as US dollars: the position silently became a USD one and split off
+  // into its own episode, because the group key is broker|ticker|currency. HKD is on the list
+  // now, and a blank can never overwrite a real currency again.
+  const oldCcy = b.ccy || 'USD', newCcy = document.getElementById('lot-ccy').value || oldCcy;
   // Positions are keyed broker|ticker|currency, so re-tagging one buy would strand the
   // sells and dividends of that position in the old currency. Currency moves as a whole.
   const sibling = x => (x.ticker||'')===(b.ticker||'') && x.broker===b.broker && (x.ccy||'USD')===oldCcy;
@@ -4483,6 +4500,13 @@ function stockMetrics(g) {
   const baseUnrealized    = baseMarketValue!=null ? baseMarketValue - baseRemainingCost : null;
   const baseOpenVal       = baseMarketValue!=null ? baseMarketValue : (remainingQty>0 ? baseRemainingCost : 0);
   const baseAbsReturn     = baseProceeds + baseDividends + baseOpenVal - baseTotalInvested;
+  // The same result with the currency taken back out: every leg at ONE rate — today's — so cost
+  // and value are measured on the same ruler and what is left is purely what the shares did.
+  // The figures above deliberately use each leg's own rate, which is the truer answer but folds
+  // two different stories into one number. Showing both is the only way to tell them apart:
+  // "the shares gained S$342.94" and "the dollar's fall took S$119.32 of it back" are both true.
+  const flatAbsReturn   = toBase(absReturn, g.ccy);
+  const flatUnrealized  = unrealized != null ? toBase(unrealized, g.ccy) : null;
   // Flag a position whose cost is still being converted at today's rate — the number is a
   // placeholder until the real rate is known, and it shouldn't look settled.
   const fxEstimated = g.ccy !== S.baseCcy && g.buys.some(b => lotFx(b).src === 'today');
@@ -4490,7 +4514,7 @@ function stockMetrics(g) {
     proceeds, totalInvested:totalCost, px, pxRaw, pxCcy, pxTs, pxUnsure, pxMismatch, marketValue, unrealized, absReturn, returnPct,
     totalPnl, totalPnlPct, cashBack, recoveredPct, stillOut, breakEven, soldBasis,
     costRate, fxEstimated, baseTotalInvested, baseRemainingCost, baseMarketValue, baseProceeds,
-    baseDividends, baseRealized, baseUnrealized, baseAbsReturn };
+    baseDividends, baseRealized, baseUnrealized, baseAbsReturn, flatAbsReturn, flatUnrealized };
   m.annual = xirr(stockFlows(g, m));
   return m;
 }
@@ -4538,12 +4562,13 @@ function renderStockStats(ms) {
   // exactly zero P&L and looked settled. Unrealized is now measured over priced holdings only,
   // and anything unpriced is reported rather than blended away.
   let pricedCost=0, pricedValue=0, unpriced=0, unsure=0, mismatched=0, fxEst=0;
+  let flatAbsSum=0, flatUnreal=0;      // the same totals with the currency effect taken out
   const pflows=[];
   for (const g of ms) {
     if (g.remainingQty>0) {
       invested+=g.baseRemainingCost;
       value+=g.baseMarketValue!=null?g.baseMarketValue:g.baseRemainingCost;
-      if (g.baseMarketValue!=null) { pricedCost+=g.baseRemainingCost; pricedValue+=g.baseMarketValue; }
+      if (g.baseMarketValue!=null) { pricedCost+=g.baseRemainingCost; pricedValue+=g.baseMarketValue; flatUnreal+=g.flatUnrealized||0; }
       else unpriced++;
       if (g.pxUnsure) unsure++;
       if (g.pxMismatch) mismatched++;
@@ -4551,6 +4576,7 @@ function renderStockStats(ms) {
     }
     realizedIncome += g.baseRealized + g.baseDividends;
     absSum += g.baseAbsReturn; investedSum += g.baseTotalInvested;
+    flatAbsSum += g.flatAbsReturn;
     // Each cash flow converts at the rate of the day it happened, so the annualised figure
     // isn't distorted by restating years of history at this morning's rate.
     for (const f of stockFlows(g, g))
@@ -4564,6 +4590,7 @@ function renderStockStats(ms) {
     if (e.kind==='interest' || e.kind==='fee' || (e.kind==='dividend'&&!e.ticker)) {
       const v = toBaseAt(_sn(e.amount), e);
       realizedIncome += v; absSum += v; pflows.push({ amount:v, date:new Date(e.date) });
+      flatAbsSum += toBase(_sn(e.amount), e.ccy||'USD');
     }
     // funding → net deposits + funded-return cash flows
     if (e.kind==='deposit' || e.kind==='withdraw') {
@@ -4583,6 +4610,14 @@ function renderStockStats(ms) {
   const fundedAnnual = xirr([...fundFlows, { amount: netFunded+totalProfit, date: new Date() }]);
   const money = n => (n>=0?'+':'-')+sym+fmt(Math.abs(n),2);
   const cls = n => n>=0?'positive':'negative';
+  // Two numbers, not one with an asterisk. The headline stays the honest one — what the money is
+  // actually worth in the currency you spend — and beneath it sits what the shares alone did.
+  // Until now only the headline existed, so a holding could look far worse in SGD than in USD
+  // with nothing on screen saying the dollar was the reason. Shown only when they differ:
+  // with no currency exposure the second number is the first one, and repeating it is noise.
+  const bothPnl = (withFx, sharesOnly, fallback) =>
+    Math.abs(withFx - sharesOnly) < 0.005 ? fallback
+      : `shares only ${money(sharesOnly)} · after currency ${money(withFx)}`;
   const pctyr = (p,a,suffix) => [p!=null?`${p>=0?'+':''}${fmt(p,1)}% ${suffix}`:'', a!=null?`${a>=0?'+':''}${fmt(a*100,1)}%/yr`:''].filter(Boolean).join(' · ');
 
   const fundedCard = statCard('Funded', sym+fmt(netFunded,2), pctyr(fundedPct, fundedAnnual, 'return') || 'net deposits');
@@ -4595,13 +4630,13 @@ function renderStockStats(ms) {
     ? fundedCard
       + statCard('Invested', sym+fmt(invested,2), 'cost basis, open')
       + statCard('Market Value', sym+fmt(value,2), pctyr(overallPct, annual, 'total') || 'at live prices')
-      + statCard('Unrealized P&L', money(unreal), priceWarn || (pricedCost?`${unreal>=0?'+':''}${fmt(unreal/pricedCost*100,1)}% unrealised`:'open positions'), cls(unreal))
+      + statCard('Unrealized P&L', money(unreal), priceWarn || bothPnl(unreal, flatUnreal, pricedCost?`${unreal>=0?'+':''}${fmt(unreal/pricedCost*100,1)}% unrealised`:'open positions'), cls(unreal))
       + statCard('Realized + Income', money(realizedIncome), 'incl. dividends', cls(realizedIncome))
     : fundedCard
       + statCard('Market Value', sym+fmt(value,2), 'open holdings now')
-      + statCard('Total P&L', money(totalProfit), pctyr(fundedPct, fundedAnnual, 'on funded') || 'all-time', cls(totalProfit))
+      + statCard('Total P&L', money(totalProfit), bothPnl(totalProfit, flatAbsSum, pctyr(fundedPct, fundedAnnual, 'on funded') || 'all-time'), cls(totalProfit))
       + statCard('Realized + Income', money(realizedIncome), 'closed + dividends', cls(realizedIncome))
-      + statCard('Unrealized P&L', money(unreal), priceWarn || `${ms.filter(g=>g.remainingQty>0).length} open`, cls(unreal));
+      + statCard('Unrealized P&L', money(unreal), priceWarn || bothPnl(unreal, flatUnreal, `${ms.filter(g=>g.remainingQty>0).length} open`), cls(unreal));
 }
 function stockRowHtml(g) {
   const sym=ccySym(g.ccy);
