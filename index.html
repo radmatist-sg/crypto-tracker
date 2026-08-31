@@ -3750,10 +3750,13 @@ function statCard(label, value, sub, cls) {
     + `<div class="stat-sub">${sub||''}</div></div>`;
 }
 function setView(v) { S.view = v; persist(); renderPortfolio(); renderStocks(); }
-function toast(msg) {
+let _toastTimer = null;
+// A warning that names three tickers can't be read in the same 2.8s a "Saved ✓" needs.
+function toast(msg, ms) {
   const el = document.getElementById('toast');
   el.textContent = msg; el.classList.add('show');
-  setTimeout(()=>el.classList.remove('show'), 2800);
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(()=>el.classList.remove('show'), ms || 2800);
 }
 
 // ═══════════════════════════════ STOCKS MODULE ═══════════════════════════════
@@ -4048,14 +4051,52 @@ function editFxRate() {
 }
 
 // Finnhub's quote endpoint returns the exchange's own currency (SPY→USD, D05.SI→SGD) and
-// never tells you which one. profile2 does. Cached on the price entry: one call per ticker, ever.
+// never tells you which one. Two sources, in this order:
+//
+//  1. The ticker's exchange suffix. This describes where the stock TRADES, which is exactly
+//     the question being asked, and it can't be wrong.
+//  2. profile2's `currency` — but note Finnhub defines that field as "currency used in company
+//     filings", i.e. the REPORTING currency, not the trading one. For a plain US listing the two
+//     match; for a US-listed ADR of a foreign company they don't, and trusting it blindly tags a
+//     USD quote as JPY/EUR/GBP and mis-scales the whole holding. Same failure as the SPY 35%
+//     understatement below, different source. So it's the fallback, never the first answer.
+//
+// A bare ticker with no suffix is a US listing quoted in USD — say so rather than making a call.
+const EXCH_CCY = { SI:'SGD', L:'GBP', HK:'HKD', T:'JPY', AX:'AUD', TO:'CAD', V:'CAD', NS:'INR',
+                   BO:'INR', KS:'KRW', KQ:'KRW', TW:'TWD', SS:'CNY', SZ:'CNY', SW:'CHF', ST:'SEK',
+                   OL:'NOK', CO:'DKK', HE:'EUR', AS:'EUR', PA:'EUR', BR:'EUR', DE:'EUR', F:'EUR',
+                   MI:'EUR', MC:'EUR', LS:'EUR', IR:'EUR', VI:'EUR', SA:'BRL', MX:'MXN', JO:'ZAR' };
+function ccyFromSuffix(tk) {
+  const m = String(tk||'').toUpperCase().match(/\.([A-Z]+)$/);
+  if (!m) return /^[A-Z][A-Z0-9.\-]*$/.test(String(tk||'').toUpperCase()) ? 'USD' : null;  // no suffix → US listing
+  return EXCH_CCY[m[1]] || null;       // suffix we don't know → fall through to profile2
+}
+// Suffix first, THEN the cache. A tag already sitting in stockPx may have come from the old
+// profile2-only path and be a filing currency — the cache is not evidence, so where the exchange
+// gives a definitive answer it wins and the stale tag is corrected on the next refresh.
 async function tickerCcy(tk) {
+  const bySuffix = ccyFromSuffix(tk); if (bySuffix) return bySuffix;
   const known = S.stockPx[tk]?.ccy; if (known) return known;
   try {
     const r = await fetch(`https://finnhub.io/api/v1/stock/profile2?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
     if (r.ok) { const d = await r.json(); if (d?.currency) return String(d.currency).toUpperCase(); }
   } catch {}
   return null;                         // unknown → don't guess; leave the price as-is and flag it
+}
+// How old the number on the row actually is. A price from three weeks ago rendered exactly like
+// one from a minute ago, so a refresh that quietly did nothing was invisible. FX states its
+// provenance on the chip; prices now do the same. Amber past a day — a market has closed and
+// reopened since, so it is no longer "the price", it is a price from before something happened.
+function pxAgeChip(ts) {
+  if (!ts) return '';
+  const mins = (Date.now() - ts) / 60000;
+  const label = mins < 1    ? 'just now'
+              : mins < 60   ? `${Math.round(mins)}m ago`
+              : mins < 1440 ? `${Math.round(mins/60)}h ago`
+              :               `${Math.round(mins/1440)}d ago`;
+  const stale = mins >= 1440;
+  return ` <span style="color:${stale?'var(--amber,#d9a441)':'var(--muted)'};font-size:11px;"
+    title="When this price was last fetched or typed. Hit ↻ Refresh Prices to update it.">${stale?'⚠ ':''}${label}</span>`;
 }
 async function refreshStockPrices() {
   if (!S.keys.finnhub) { toast('Add a free Finnhub API key in Settings to fetch stock prices.'); return; }
@@ -4064,13 +4105,33 @@ async function refreshStockPrices() {
   toast('Refreshing stock prices…');
   await fetchFx();
   await fetchFxHist(S.stocks.map(e => e.date));
+  // Every failure here used to be swallowed and still reported "updated ✓" — an expired key, a
+  // rate-limit, or a ticker the plan doesn't cover left the previous price on screen looking
+  // current. Count what actually landed and name what didn't; the old price is still shown, but
+  // now you know it's old. (Same lesson as the frankfurter redirect that hid for months.)
+  let ok = 0; const failed = [], retagged = [];
   for (const tk of tickers) {
     try {
       const r = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(tk)}&token=${S.keys.finnhub}`);
-      if (r.ok) { const d = await r.json(); if (d && d.c) S.stockPx[tk] = { price:d.c, ts:Date.now(), ccy: await tickerCcy(tk) }; }
-    } catch {}
+      if (!r.ok) { failed.push(`${tk} (${r.status === 401 || r.status === 403 ? 'not on your plan / bad key' : 'HTTP '+r.status})`); continue; }
+      const d = await r.json();
+      // A symbol Finnhub doesn't cover answers 200 with every field zeroed. That is a miss,
+      // not a price of nothing — treat it as one instead of silently keeping the stale figure.
+      if (!(d && d.c > 0)) { failed.push(`${tk} (no quote)`); continue; }
+      const wasCcy = S.stockPx[tk]?.ccy || null, ccy = await tickerCcy(tk);
+      // A currency correction silently rescales a whole holding, so it is never allowed to
+      // happen quietly — it is the one change here worth interrupting for.
+      if (wasCcy && ccy && ccy !== wasCcy) retagged.push(`${tk} ${wasCcy}→${ccy}`);
+      S.stockPx[tk] = { price:d.c, ts:Date.now(), ccy };
+      ok++;
+    } catch { failed.push(`${tk} (network/CORS)`); }
   }
-  persist(); renderStocks(); toast('Stock prices updated ✓');
+  persist(); renderStocks();
+  const list = failed.slice(0,4).join(', ') + (failed.length>4 ? ` +${failed.length-4} more` : '');
+  if (retagged.length)  toast(`${ok} updated ✓ · quote currency corrected: ${retagged.join(', ')}${failed.length?` · ⚠ failed: ${list}`:''}`, 9000);
+  else if (!failed.length) toast(`${ok} price${ok===1?'':'s'} updated ✓`);
+  else if (!ok)         toast(`⚠ No prices updated — ${list}`, 7000);
+  else                  toast(`${ok} updated ✓ · ⚠ failed: ${list}`, 7000);
 }
 function editStockPrice(tk, ccy) {
   // Typed prices are quoted in whatever currency the person is looking at, so stamp the
@@ -4358,6 +4419,7 @@ function stockMetrics(g) {
   // One price entry serves every holding of this ticker, but those holdings can be booked in
   // different currencies (SPY at IG in SGD, SPY at Moomoo in USD). Convert into this group's.
   const pxRaw=S.stockPx[g.ticker]?.price ?? null, pxCcy=S.stockPx[g.ticker]?.ccy || null;
+  const pxTs=S.stockPx[g.ticker]?.ts || 0;   // stored since day one, never shown until now
   const px=pxRaw!=null?convCcy(pxRaw, pxCcy, g.ccy):null;
   const pxUnsure = pxRaw!=null && !pxCcy && g.ccy!=='USD';   // can't confirm the quote's currency
   // The quote's currency is known and it isn't the one this position is booked in. Genuine for
@@ -4399,7 +4461,7 @@ function stockMetrics(g) {
   // placeholder until the real rate is known, and it shouldn't look settled.
   const fxEstimated = g.ccy !== S.baseCcy && g.buys.some(b => lotFx(b).src === 'today');
   const m = { ...g, totalBought, avgCost, soldQty, remainingQty, remainingCost, realized, dividends,
-    proceeds, totalInvested:totalCost, px, pxRaw, pxCcy, pxUnsure, pxMismatch, marketValue, unrealized, absReturn, returnPct,
+    proceeds, totalInvested:totalCost, px, pxRaw, pxCcy, pxTs, pxUnsure, pxMismatch, marketValue, unrealized, absReturn, returnPct,
     totalPnl, totalPnlPct, cashBack, recoveredPct, stillOut, breakEven, soldBasis,
     costRate, fxEstimated, baseTotalInvested, baseRemainingCost, baseMarketValue, baseProceeds,
     baseDividends, baseRealized, baseUnrealized, baseAbsReturn };
@@ -4536,7 +4598,7 @@ function stockRowHtml(g) {
     const conv = g.pxMismatch
       ? `<span style="display:block;color:var(--amber,#d9a441);font-size:11px;" title="${g.ticker} is quoted in ${g.pxCcy} but this position is booked in ${g.ccy}. If that's wrong, expand the row and edit the purchase.">⚠ quoted ${ccySym(g.pxCcy)}${fmt(g.pxRaw,2)} ${g.pxCcy}</span>` : '';
     const warn = g.pxUnsure ? ` <span style="color:var(--muted);font-size:11px;" title="Currency of this quote isn't confirmed — refresh prices to check it, or set it manually">⚠</span>` : '';
-    priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}','${g.ccy}')">${sym}${fmt(g.px,2)}</span>${conv}${warn}`;
+    priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}','${g.ccy}')">${sym}${fmt(g.px,2)}</span>${pxAgeChip(g.pxTs)}${conv}${warn}`;
   }
   else priceCell=`<span class="price-cell" onclick="editStockPrice('${g.ticker}','${g.ccy}')" style="color:var(--muted);font-size:11px;">click / refresh</span>`;
   const cashedOut = partSold && g.cashBack>0.005
