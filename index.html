@@ -1209,6 +1209,13 @@ async function doPull(announce) {
     S.stocks = mergeById(S.stocks, remote.stocks, S.tombstones);
     S.stockPx = mergePx(S.stockPx, remote.stockPx);
 
+    // API keys are not a scalar preference — they are the thing that decides whether live data
+    // works at all, and they were riding on the timestamp comparison below. On any device whose
+    // local write was the newer one, the key simply never came down: the account looked fully
+    // synced, trades and prices were all present, and prices silently never refreshed. Merge them
+    // outside the guard, per key, and never let a blank side erase a real key.
+    if (remote.keys) for (const [k, v] of Object.entries(remote.keys)) if (!S.keys[k] && v) S.keys[k] = v;
+
     // Config/scalar fields rarely conflict — adopt the cloud's only if it's the newer write.
     if ((remote.updatedAt || 0) > (S.updatedAt || 0)) {
       if (remote.keys)   S.keys = { ...S.keys, ...remote.keys };
@@ -4098,11 +4105,30 @@ function pxAgeChip(ts) {
   return ` <span style="color:${stale?'var(--amber,#d9a441)':'var(--muted)'};font-size:11px;"
     title="When this price was last fetched or typed. Hit ↻ Refresh Prices to update it.">${stale?'⚠ ':''}${label}</span>`;
 }
-async function refreshStockPrices() {
+// Reloading the page fetched every other live number — the ETH rate, FX, the whole crypto side —
+// but never a stock price: refreshStockPrices() hung off the two ↻ buttons and nothing else. So a
+// quote sat at its last fetch indefinitely while the page around it looked freshly loaded, and
+// pressing browser-reload to update it did exactly nothing, forever. Prices now behave like every
+// other live figure here. Once per session, and only when what's on screen has actually gone off.
+const PX_STALE_MS = 15 * 60 * 1000;
+let _pxAutoDone = false;
+function autoRefreshStockPrices() {
+  if (_pxAutoDone || !S.keys.finnhub) return;
+  const tickers = [...new Set(S.stocks.filter(e=>e.kind==='buy'||e.kind==='sell').map(e=>(e.ticker||'').toUpperCase()))].filter(Boolean);
+  if (!tickers.length) return;
+  // Oldest quote on the board decides: one ticker left behind is enough to make the page wrong.
+  const oldest = Math.min(...tickers.map(tk => S.stockPx[tk]?.ts || 0));
+  if (Date.now() - oldest < PX_STALE_MS) return;
+  _pxAutoDone = true;
+  refreshStockPrices(true);            // quiet: says nothing on success, still speaks up on failure
+}
+// `quiet` is for the automatic pass — an unasked-for refresh shouldn't announce itself when it
+// works. Failures are never quiet: a silent failure is the bug this whole change exists to close.
+async function refreshStockPrices(quiet) {
   if (!S.keys.finnhub) { toast('Add a free Finnhub API key in Settings to fetch stock prices.'); return; }
   const tickers = [...new Set(S.stocks.filter(e=>e.kind==='buy'||e.kind==='sell').map(e=>(e.ticker||'').toUpperCase()))].filter(Boolean);
   if (!tickers.length) return;
-  toast('Refreshing stock prices…');
+  if (!quiet) toast('Refreshing stock prices…');
   await fetchFx();
   await fetchFxHist(S.stocks.map(e => e.date));
   // Every failure here used to be swallowed and still reported "updated ✓" — an expired key, a
@@ -4129,7 +4155,7 @@ async function refreshStockPrices() {
   persist(); renderStocks();
   const list = failed.slice(0,4).join(', ') + (failed.length>4 ? ` +${failed.length-4} more` : '');
   if (retagged.length)  toast(`${ok} updated ✓ · quote currency corrected: ${retagged.join(', ')}${failed.length?` · ⚠ failed: ${list}`:''}`, 9000);
-  else if (!failed.length) toast(`${ok} price${ok===1?'':'s'} updated ✓`);
+  else if (!failed.length) { if (!quiet) toast(`${ok} price${ok===1?'':'s'} updated ✓`); }
   else if (!ok)         toast(`⚠ No prices updated — ${list}`, 7000);
   else                  toast(`${ok} updated ✓ · ⚠ failed: ${list}`, 7000);
 }
@@ -4870,7 +4896,10 @@ async function refreshAllFx() {
 initAuth()
   .then(refreshEthRate)
   .then(backfillNativeUsd)
-  .then(() => renderPortfolio());
+  .then(() => renderPortfolio())
+  // After auth, not before: the API key and the last-known prices both arrive with the pull,
+  // so running this earlier would look keyless on any device that hadn't stored one locally.
+  .then(autoRefreshStockPrices);
 // Re-check the account whenever you return to the tab (e.g. switching from phone to laptop).
 window.addEventListener('focus', () => { if (syncEnabled()) doPull(); });
 </script>
