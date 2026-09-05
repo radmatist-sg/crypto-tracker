@@ -1412,6 +1412,36 @@ async function fetchEvm(chain, hash) {
     }
   }
 
+  // Seaport payouts (OpenSea and every marketplace built on it, Robinhood chain included).
+  // The ETH a seller receives is an INTERNAL transfer: absent from the Transfer logs above
+  // AND from tx.value, which is the buyer's spend. But Seaport's OrderFulfilled event
+  // itemises every payment — recipient, asset, amount — so the proceeds can be read
+  // straight from the receipt we already hold. That matters because both other routes are
+  // unreliable: Robinhood's public RPC prunes historical state within a few thousand
+  // blocks ("metadata is not found"), and its Blockscout API returned 503 on every route.
+  // Only NATIVE items are collected here; ERC-20 payment (WETH etc.) already appears as a
+  // Transfer log and is read as a token.
+  const ORDER_FULFILLED = '0x9d9af8e38d66c62e2c12f0225249fd9d721c54b83f48d9352c97c6cacdcb6f31';
+  const nativePayouts = [];
+  for (const l of (rc.logs || [])) {
+    if ((l.topics[0] || '').toLowerCase() !== ORDER_FULFILLED) continue;
+    const raw = (l.data || '').slice(2);
+    const word = i => raw.slice(i*64, i*64 + 64);
+    const num  = i => { const w = word(i); return w.length === 64 ? BigInt('0x'+w) : 0n; };
+    try {
+      // data: [orderHash, recipient, offerOffset, considerationOffset, ...arrays]
+      // consideration entries are 5 words each: itemType, token, identifier, amount, recipient
+      const base = Number(num(3)) / 32;
+      const n = Number(num(base));
+      if (!Number.isInteger(base) || n < 0 || n > 64) continue;
+      for (let k = 0; k < n; k++) {
+        const b = base + 1 + k*5;
+        if (num(b) !== 0n) continue;                     // itemType 0 = native ETH
+        nativePayouts.push({ from:l.address, to:'0x'+word(b+4).slice(24), value:num(b+3).toString() });
+      }
+    } catch { /* unrecognised layout — the other readers still get their turn */ }
+  }
+
   // Look up name / symbol / decimals for each contract involved.
   const decStr = hex => {
     if (!hex || hex.length < 130) return '';
@@ -1436,7 +1466,37 @@ async function fetchEvm(chain, hash) {
   };
   tokens.forEach(apply); nfts.forEach(apply); e1155.forEach(apply);
 
-  return { chain, hash, from:tx.from, valueEth, gasEth, ts, tokens, nfts, e1155 };
+  return { chain, hash, from:tx.from, valueEth, gasEth, ts, blockNumber:tx.blockNumber,
+           tokens, nfts, e1155, nativePayouts };
+}
+
+// Net ETH that landed in my wallet across the block holding this trade. Marketplace
+// proceeds (Seaport/Blur/OpenSea) arrive as an INTERNAL transfer — invisible in the
+// receipt logs and in tx.value — and the explorer API that used to be the only source
+// for them is a single point of failure: Robinhood's Blockscout answered 503 on every
+// route (v1 and v2 alike) on 5 Sep 2026, which is exactly what made a real NFT sale
+// unreadable. The balance DELTA over the trade block needs no explorer and no API key,
+// works for any marketplace on any EVM chain, and nets out gas by itself: if I
+// submitted the transaction the delta already accounts for what I paid, and if the
+// counterparty submitted it there was nothing of mine to net.
+// Returns null (not 0) when the RPC won't serve historical state, so the caller can
+// tell "no proceeds" apart from "couldn't read them" and fall back to the explorer.
+async function fetchNetEthIn(chain, blockNumberHex, addrs) {
+  if (!blockNumberHex || !addrs.length) return null;
+  let prev;
+  try { prev = '0x' + (BigInt(blockNumberHex) - 1n).toString(16); } catch { return null; }
+  let total = 0;
+  for (const a of addrs) {
+    try {
+      const [now, before] = await Promise.all([
+        rpcCall(chain, 'eth_getBalance', [a, blockNumberHex]),
+        rpcCall(chain, 'eth_getBalance', [a, prev])
+      ]);
+      if (now == null || before == null) return null;
+      total += Number(BigInt(now) - BigInt(before)) / 1e18;
+    } catch { return null; }   // archive state unavailable — caller falls back
+  }
+  return total;
 }
 
 // Internal ETH transfers for a tx. Marketplace sale proceeds (Blur/Seaport/OpenSea)
@@ -1540,9 +1600,13 @@ function parseEvm(d) {
             .map(x => x.tokenID)
       : [];
     const count = n721 ? Math.max(1, lotIds.length) : parseInt(n.tokenValue||'1');
+    // Gas is paid by the SUBMITTER. When the seller accepts my offer they submit it and
+    // pay — their gas is not part of my cost basis. (The ERC-20 branch below already
+    // makes this distinction; the NFT branch was charging it to me regardless.)
+    const nftGas = (from.toLowerCase() === owner) ? gasEth : 0;
     return { type:'nft', name:n.tokenName||'Unknown NFT', symbol:n.tokenSymbol||'?',
       contract:n.contractAddress, tokenId:n.tokenID, tokenIds:lotIds, amount:count,
-      noFee, fee:gasEth, withFee:noFee+gasEth, ccy:costCcy, feeCcy:ccy, date,
+      noFee, fee:nftGas, withFee:noFee+nftGas, ccy:costCcy, feeCcy:ccy, date,
       note: (n721 && count > 1)
         ? `${count} NFTs minted in this transaction (#${lotIds.join(', #')}) — ${fmt(noFee/count,4)} ${costCcy} each. They'll be added as ${count} separate lots so each can be valued and sold on its own.`
         : undefined };
@@ -3412,21 +3476,33 @@ async function fetchSellTx() {
       // "Me" = any of my registered wallets; fall back to the tx sender if none set.
       const mine = a => haveWallets() ? isMyWallet(a, t.chain) : a.toLowerCase() === from.toLowerCase();
 
-      // How many of THIS asset left my wallet (quantity sold)
+      // How many of THIS asset left my wallet (quantity sold), and WHICH of my wallets
+      // sent it — that wallet is the one the proceeds are paid to, so the balance-delta
+      // read below can target it precisely instead of sweeping every wallet I own.
+      const soldFrom = new Set();
       if (t.asset.contract) {
         const ca = t.asset.contract.toLowerCase();
         if (t.type === 'nft') {
-          detectedQty = nfts.filter(n=>mine(n.from) && n.contractAddress.toLowerCase()===ca).length
-            + e1155.filter(n=>mine(n.from) && n.contractAddress.toLowerCase()===ca).reduce((s,n)=>s+parseInt(n.tokenValue||'1'),0);
+          for (const n of nfts.filter(n=>mine(n.from) && n.contractAddress.toLowerCase()===ca)) {
+            detectedQty += 1; soldFrom.add(n.from.toLowerCase());
+          }
+          for (const n of e1155.filter(n=>mine(n.from) && n.contractAddress.toLowerCase()===ca)) {
+            detectedQty += parseInt(n.tokenValue||'1'); soldFrom.add(n.from.toLowerCase());
+          }
         } else {
           for (const x of tokens.filter(x=>mine(x.from) && x.contractAddress.toLowerCase()===ca)) {
             const dec = parseInt(x.tokenDecimal||'18'); detectedQty += parseInt(x.value)/10**dec;
+            soldFrom.add(x.from.toLowerCase());
           }
         }
       }
 
       feeCcy = CHAINS[t.chain].ccy;
-      feeCost = gasEth;
+      // Gas belongs to whoever SUBMITTED the transaction. When I accept an offer that the
+      // buyer fulfils, or someone fills my standing listing, THEY submit and THEY pay —
+      // charging me their gas silently understates my proceeds on every such sale.
+      const iPaidGas = mine(from);
+      feeCost = iPaidGas ? gasEth : 0;
       nativeUsd = await nativePrice(t.chain);
       sellDate = ts ? new Date(ts*1000).toISOString().slice(0,10) : '';
 
@@ -3440,24 +3516,43 @@ async function fetchSellTx() {
         proceedsWithFee = proceedsNoFee; // stablecoin/token; gas is in ETH separately
         ccy = bestTok.tokenSymbol;
       } else {
-        // Plain-ETH proceeds (NFT sales on Blur/Seaport/OpenSea, some DEXes) arrive
-        // as an INTERNAL transfer to my wallet — invisible in logs and in tx.value
-        // (tx.value is the buyer's spend, not mine). Read internal transfers via the
-        // explorer API and sum only the ETH sent to one of my registered wallets.
-        const internals = await fetchInternalEth(t.chain, hash);
+        // Plain-ETH proceeds (NFT sales on Seaport/OpenSea/Blur, some DEXes) arrive as an
+        // INTERNAL transfer to my wallet — invisible in the logs and in tx.value, which is
+        // the buyer's spend, not mine. Three readers, cheapest and most durable first.
+        //
+        // 1. The Seaport OrderFulfilled event in the receipt we already hold. No extra
+        //    request, and it keeps working however old the sale gets.
         let ethIn = 0;
-        for (const x of internals) if (mine(x.to)) ethIn += Number(BigInt(x.value)) / 1e18;
+        for (const p of (evmData.nativePayouts || [])) {
+          if (mine(p.to)) ethIn += Number(BigInt(p.value)) / 1e18;
+        }
+        // 2. Balance delta across the sale block — marketplace-agnostic, so it catches
+        //    non-Seaport venues. Needs an archive RPC: Robinhood's public node prunes
+        //    state after a few thousand blocks, so this goes second, not first.
+        if (ethIn === 0) {
+          const addrs = soldFrom.size ? [...soldFrom]
+                      : myWalletAddrs().filter(a => /^0x[0-9a-fA-F]{40}$/.test(a));
+          const delta = await fetchNetEthIn(t.chain, evmData.blockNumber, addrs);
+          // The delta is already net of any gas I paid; add it back so every branch
+          // below hands the same meaning (gross) to the lines that follow.
+          if (delta !== null && delta > 0) ethIn = delta + feeCost;
+        }
+        // 3. The explorer's internal-transfer list. Last: it needs an API key on the
+        //    Etherscan chains, and on Robinhood it is a third party that can be — and on
+        //    5 Sep 2026 was — returning 503 on every route.
+        if (ethIn === 0) {
+          const internals = await fetchInternalEth(t.chain, hash);
+          for (const x of internals) if (mine(x.to)) ethIn += Number(BigInt(x.value)) / 1e18;
+        }
+        ethIn -= feeCost;                                  // net of gas I actually paid
         if (ethIn > 0) {
-          proceedsNoFee   = ethIn;
-          proceedsWithFee = ethIn - gasEth;
+          proceedsWithFee = ethIn;              // already net of gas
+          proceedsNoFee   = ethIn + feeCost;    // gross, before my own gas
           ccy = CHAINS[t.chain].ccy;
         } else {
           // Soft fail: couldn't read the proceeds — let Zul type them in.
           if (detectedQty > 0) document.getElementById('sell-qty').value = detectedQty;
-          const needKey = !(S.keys.eth || S.keys.base || S.keys.arb);
-          st.textContent = needKey
-            ? `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}. The ETH proceeds came via an internal transfer — add your Etherscan API key in Settings to read it automatically, or enter the amount received below.`
-            : `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}, but couldn't find ETH paid to your wallet — enter the amount received below.`;
+          st.textContent = `Read ${detectedQty?fmt(detectedQty,4)+' sold':'the sale'}, but couldn't find ETH paid to your wallet — enter the amount received below.`;
           btn.disabled = false;
           return;
         }
