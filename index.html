@@ -4488,6 +4488,31 @@ function delStockEpisode(key) {
   S.stocks = S.stocks.filter(e => !ids.has(e.id));
   persist(); renderStocks();
 }
+// Remove ONE buy or sale. A doubled-up entry sits in the same trade as its twin, so the
+// row's × (which removes the whole trade) could only ever take both — there was no way to
+// drop just the copy.
+function delStockEntry(id) {
+  const e = S.stocks.find(x => x.id===id); if (!e) { toast('Entry not found.'); return; }
+  const isSale = e.kind==='sell', sym = ccySym(e.ccy||'USD');
+  const sibling = x => (x.ticker||'')===(e.ticker||'') && x.broker===e.broker && (x.ccy||'USD')===(e.ccy||'USD');
+  const group = S.stocks.filter(sibling);
+  if (!isSale) {
+    const bought = group.filter(x => (x.kind==='buy'||!x.kind) && x.id!==id).reduce((s,x)=>s+_sn(x.shares),0);
+    const sold   = group.filter(x => x.kind==='sell').reduce((s,x)=>s+_sn(x.shares),0);
+    if (sold > bought + 1e-9) { toast(`Can't remove — ${fmt(sold,4)} shares were sold and only ${fmt(bought,4)} would remain bought.`); return; }
+  }
+  if (!confirm(`Remove this ${isSale?'sale':'purchase'} only?\n\n${e.ticker}: ${fmt(_sn(e.shares),4)} shares @ ${sym}${fmt(_sn(e.price),2)} on ${fmtDate(e.date)} (${acctLabel(e.broker)})\n\nEvery other entry stays.`)) return;
+  // A sale's frozen cost basis may have been worked out with this buy in the pool — re-derive
+  // every later sale in the position so none keeps a basis built on an entry that's gone.
+  if (!isSale) {
+    const day = (e.date||'').slice(0,10);
+    for (const s of group) if (s.kind==='sell' && (s.date||'').slice(0,10) >= day) { delete s.basis; delete s.avgCostAt; }
+  }
+  tombstone(id);
+  S.stocks = S.stocks.filter(x => x.id!==id);
+  stampSaleBasis(); persist(); renderStocks();
+  toast(`${isSale?'Sale':'Purchase'} removed ✓`);
+}
 
 // Portfolio labels per broker (editable)
 const BROKER_DEF = { moomoo:'Moomoo', tiger:'Tiger', ig:'IG', other:'Other' };
@@ -4953,7 +4978,7 @@ function stockDetailRows(g, sym) {
       <td><span class="neutral">—</span></td>
       <td style="font-size:12px;color:var(--muted);">${sym}${fmt(cost,2)}</td>
       <td><span class="neutral">—</span></td>
-      <td><div class="trade-actions"><button class="action-btn" title="Correct this purchase — shares, price, currency, date" onclick="editBuyLot('${b.id}')">Edit</button></div></td>
+      <td><div class="trade-actions"><button class="action-btn" title="Correct this purchase — shares, price, currency, date" onclick="editBuyLot('${b.id}')">Edit</button><button class="action-btn del" title="Remove this purchase only" onclick="delStockEntry('${b.id}')">×</button></div></td>
     </tr>`);
   }
   const sells = g.sells.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
@@ -4974,7 +4999,7 @@ function stockDetailRows(g, sym) {
       <td><span class="sold-badge">SELL</span></td>
       <td style="font-size:12px;">${sym}${fmt(proceeds,2)}</td>
       <td><span class="${rcls}">${rsgn}${sym}${fmt(Math.abs(realized),2)}</span>${pct!=null?` <span style="font-size:11px;">(${realized>=0?'+':''}${fmt(pct,1)}%)</span>`:''}</td>
-      <td><div class="trade-actions"><button class="action-btn" title="Correct this sale — shares, price, date" onclick="editLot('${s.id}')">Edit</button></div></td>
+      <td><div class="trade-actions"><button class="action-btn" title="Correct this sale — shares, price, date" onclick="editLot('${s.id}')">Edit</button><button class="action-btn del" title="Remove this sale only" onclick="delStockEntry('${s.id}')">×</button></div></td>
     </tr>`);
   }
   if (g.remainingQty>0 && g.sells.length>0) {
