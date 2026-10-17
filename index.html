@@ -736,6 +736,7 @@ hr { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
         <label id="lot-fx-label">Total charged <span style="opacity:.6;font-weight:400;">— optional</span></label>
         <input type="number" id="lot-usd" step="0.0001" placeholder="from your contract note" oninput="updateLotFxHint()">
       </div>
+      <div class="form-row" style="grid-column:1 / -1;"><label>Note (optional)</label><input id="lot-note" placeholder="optional"></div>
     </div>
     <div id="lot-fx-hint" style="font-size:11px;color:var(--muted);margin:10px 0 0;line-height:1.6;"></div>
     <div id="lot-ccy-hint" style="font-size:11px;color:var(--muted);margin:10px 0 0;line-height:1.6;"></div>
@@ -4400,6 +4401,7 @@ function editLot(id) {
   document.getElementById('lot-ccy').value    = ccy;
   document.getElementById('lot-fees').value   = _sn(b.fees) || '';
   document.getElementById('lot-date').value   = (b.date||'').slice(0,10);
+  document.getElementById('lot-note').value   = b.note || '';
   // Both legs of the fill are on every contract note, and their ratio is the rate the broker
   // actually charged — spread included. No market lookup can reproduce that, so if it's
   // available it beats everything else.
@@ -4443,6 +4445,7 @@ function saveLotEdit() {
   if (!shares || !price) { toast('Enter shares and price.'); return; }
   const date = toISODate(document.getElementById('lot-date').value);
   if (!date) { toast('Enter the date.'); return; }
+  const note = document.getElementById('lot-note').value.trim();
 
   // The rate this fill was actually done at, derived from the two legs on the contract note.
   // Stored on the entry, because that is what it is a fact about — not about the app or today.
@@ -4459,7 +4462,7 @@ function saveLotEdit() {
     // The frozen basis was fixed against the old quantity and date, so drop it and let
     // stampSaleBasis replay the position and re-derive it — same rule the crypto side uses.
     delete b.basis; delete b.avgCostAt;
-    Object.assign(b, { shares, price, fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now(), ..._rateFor(b.ccy||'USD', true) });
+    Object.assign(b, { shares, price, fees:_sn(document.getElementById('lot-fees').value), date, note, _m: Date.now(), ..._rateFor(b.ccy||'USD', true) });
     stampSaleBasis(); persist(); closeLotModal(); renderStocks();
     toast('Sale updated ✓'); return;
   }
@@ -4483,7 +4486,7 @@ function saveLotEdit() {
   if (sold > otherBuys + shares + 1e-9) { toast(`That leaves fewer shares than the ${fmt(sold,4)} already sold.`); return; }
   if (newCcy !== oldCcy) for (const x of group) { x.ccy = newCcy; x._m = Date.now(); }
   Object.assign(b, { shares, price, ccy:newCcy,
-    fees:_sn(document.getElementById('lot-fees').value), date, _m: Date.now(), ..._rateFor(newCcy, false) });
+    fees:_sn(document.getElementById('lot-fees').value), date, note, _m: Date.now(), ..._rateFor(newCcy, false) });
   stampSaleBasis(); persist(); closeLotModal(); renderStocks();
   toast('Purchase updated ✓');
 }
@@ -4975,6 +4978,11 @@ function pendingRowHtml(g, sym) {
     <span style="font-size:10.5px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);margin-right:7px;">exit orders</span>${badges}${statLine}</td></tr>`;
 }
 // Individual buy lots + sells + remaining line shown when a stock position is expanded.
+// The Add form has always saved a note, but nothing ever displayed it — so every note typed in
+// was kept and never seen. It belongs on the buy or sale it describes, not on the position.
+function lotNoteHtml(e) {
+  return e.note ? `<span style="display:block;color:var(--text);opacity:.8;white-space:normal;">${esc(e.note)}</span>` : '';
+}
 function stockDetailRows(g, sym) {
   const rows = [];
   const buys = g.buys.slice().sort((a,b)=>new Date(a.date)-new Date(b.date));
@@ -4983,7 +4991,7 @@ function stockDetailRows(g, sym) {
     rows.push(`<tr class="lot-row">
       <td><div class="asset-cell"><div class="asset-icon" style="color:var(--blue)">BUY</div><div>
         <div class="asset-name"><span class="lot-prefix" style="color:var(--blue)">↳</span>Bought ${fmt(sh, sh%1?4:0)}</div>
-        <div class="asset-sub">${fmtDate(b.date)}${fee?` · fee ${sym}${fmt(fee,2)}`:''}</div></div></div></td>
+        <div class="asset-sub">${fmtDate(b.date)}${fee?` · fee ${sym}${fmt(fee,2)}`:''}${lotNoteHtml(b)}</div></div></div></td>
       <td style="color:var(--muted);font-size:12px;">${fmt(sh, sh%1?4:0)}</td>
       <td style="font-size:12px;">@ ${sym}${fmt(pr,2)}</td>
       <td><span class="neutral">—</span></td>
@@ -5004,7 +5012,7 @@ function stockDetailRows(g, sym) {
     rows.push(`<tr class="lot-row sell-row">
       <td><div class="asset-cell"><div class="asset-icon" style="color:var(--red)">SLD</div><div>
         <div class="asset-name"><span class="lot-prefix" style="color:var(--red)">↳</span>Sold ${fmt(sh, sh%1?4:0)}</div>
-        <div class="asset-sub">${fmtDate(s.date)}${fee?` · fee ${sym}${fmt(fee,2)}`:''}</div></div></div></td>
+        <div class="asset-sub">${fmtDate(s.date)}${fee?` · fee ${sym}${fmt(fee,2)}`:''}${lotNoteHtml(s)}</div></div></div></td>
       <td style="color:var(--muted);font-size:12px;">${fmt(sh, sh%1?4:0)}</td>
       <td style="font-size:12px;">@ ${sym}${fmt(pr,2)}</td>
       <td><span class="sold-badge">SELL</span></td>
