@@ -4067,6 +4067,17 @@ function addStockManual() {
     if (!ticker) { toast('Enter a ticker.'); return; }
     const shares=_sn(document.getElementById('st-shares').value), price=_sn(document.getElementById('st-price').value);
     if (!shares||!price) { toast('Enter shares and price.'); return; }
+    // Positions are keyed broker|ticker|currency, so a buy in a second currency silently starts a
+    // second position. That split SPY at IG twice (9 Sep, 16 Oct): the SGD debit off the contract
+    // note went into the price box and the currency followed it. Ask before it happens again.
+    const heldIn = [...new Set(S.stocks.filter(x => (x.ticker||'')===ticker && x.broker===broker
+      && (x.ccy||'USD')!==ccy).map(x => x.ccy||'USD'))];
+    if (heldIn.length && !confirm(`You already hold ${ticker} at ${acctLabel(broker)} in ${heldIn.join(' / ')}. Is this ${t==='sell'?'sale':'buy'} really in ${ccy}?\n\n`
+        + `Saving it in ${ccy} starts a separate ${ticker} position — it won't merge with the ${heldIn[0]} one.\n\n`
+        + (fxPairOther(heldIn[0])===ccy
+          ? `If the ${ccy} figure is what ${t==='sell'?'reached':'came off'} your account, press Cancel, switch the currency to ${heldIn[0]}, enter the ${heldIn[0]} price per share, `
+            + `and put the ${ccy} total in the "Total ${t==='sell'?'credited':'charged'} in ${ccy}" box instead.`
+          : `Press Cancel to switch the currency to ${heldIn[0]}.`))) return;
     Object.assign(e, { ticker, name, shares, price, fees:_sn(document.getElementById('st-fees').value) });
     Object.assign(e, _lotRate(ccy, _lotCash(shares, price, _sn(document.getElementById('st-fees').value), t==='sell'),
       _sn(document.getElementById('st-fx').value)));
